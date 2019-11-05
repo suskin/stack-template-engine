@@ -1,0 +1,7 @@
+---
+apiVersion: stacks.crossplane.io/v1alpha1
+kind: ClusterStackInstall
+metadata:
+  name: "crossplane-stack-helm"
+spec:
+  package: "crossplane/stack-helm"

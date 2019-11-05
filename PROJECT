@@ -1,0 +1,7 @@
+version: "2"
+domain: samples.stacks.crossplane.io
+repo: github.com/suskin/stack-helm
+resources:
+- group: helm
+  version: v1alpha1
+  kind: HelmChartInstall

@@ -1,0 +1,7 @@
+apiVersion: helm.samples.stacks.crossplane.io/v1alpha1
+kind: HelmChartInstall
+metadata:
+  name: helmchartinstall-sample
+spec:
+  # Add fields here
+  foo: bar
