@@ -16,6 +16,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"reflect"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -53,6 +55,13 @@ type HelmChartInstallList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []HelmChartInstall `json:"items"`
 }
+
+// Type metadata.
+var (
+	HelmChartInstallKind             = reflect.TypeOf(HelmChartInstall{}).Name()
+	HelmChartInstallKindAPIVersion   = HelmChartInstallKind + "." + GroupVersion.String()
+	HelmChartInstallGroupVersionKind = GroupVersion.WithKind(HelmChartInstallKind)
+)
 
 func init() {
 	SchemeBuilder.Register(&HelmChartInstall{}, &HelmChartInstallList{})

@@ -22,6 +22,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+
 	helmv1alpha1 "github.com/suskin/stack-helm/api/v1alpha1"
 )
 
@@ -35,10 +37,19 @@ type HelmChartInstallReconciler struct {
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls/status,verbs=get;update;patch
 
 func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	_ = context.Background()
+	ctx := context.Background()
 	_ = r.Log.WithValues("helmchartinstall", req.NamespacedName)
 
 	// your logic here
+	i := &helmv1alpha1.HelmChartInstall{}
+	if err := r.Client.Get(ctx, req.NamespacedName, i); err != nil {
+		if kerrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	r.Log.V(0).Info("Hello World!", "instanceName", req.NamespacedName, "instance", i)
 
 	return ctrl.Result{}, nil
 }
