@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	helmv1alpha1 "github.com/suskin/stack-helm/api/v1alpha1"
 )
@@ -52,6 +53,66 @@ func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 	r.Log.V(0).Info("Hello World!", "instanceName", req.NamespacedName, "instance", i)
 
 	return ctrl.Result{}, nil
+}
+
+func (r *HelmChartInstallReconciler) render() error {
+	/**
+	* Steps to rendering:
+	- Grab the original claim
+	- Load the stack's stack.yaml configuration
+	- From the stack.yaml, load the stack's configuration to be processed
+	- Process the configuration as specified
+	- Grab the output / result, and Apply the output or report the failure
+	- Report the result to the status of the original claim
+
+	Other steps:
+	- Watch for new types being provided by stacks
+	- When there is a new type provided, watch for instances being created
+	- When an instance is created, feed it into the renderer
+	*/
+
+	// claim is an unstructured.Unstructured
+	claim, err := r.getClaim()
+
+	// configuration is a typed object
+	configuration, err := r.getStackConfiguration()
+
+	// TODO the status will have more than *just* the result in it,
+	// but we can start with just the result
+	result, err := r.processConfiguration(claim, configuration)
+
+	err = r.setClaimStatus(claim, result)
+
+	return err
+}
+
+func (r *HelmChartInstallReconciler) getClaim() (unstructured.Unstructured, error) {
+	// The claim is the CR that triggered this whole thing.
+	return unstructured.Unstructured{}, nil
+}
+
+func (r *HelmChartInstallReconciler) getStackConfiguration() (unstructured.Unstructured, error) {
+	// See the template stacks internal design doc for details, but
+	// the most likely source of the stack configuration is the stack object itself.
+	// Other potential sources include a configmap
+	return unstructured.Unstructured{}, nil
+}
+
+func (r *HelmChartInstallReconciler) processConfiguration(
+	claim unstructured.Unstructured, configuration unstructured.Unstructured,
+) (unstructured.Unstructured, error) {
+	//job := Job{}
+	return unstructured.Unstructured{}, nil
+}
+
+func (r *HelmChartInstallReconciler) setClaimStatus(
+	claim unstructured.Unstructured, result unstructured.Unstructured,
+) error {
+	// The claim is the CR that triggered this whole thing.
+	// The result is the result of trying to apply or delete the templates rendered from processing the claim.
+	// If the processing happens in a job, the status should be updated after the job completes, which may mean
+	// waiting for it to complete by using a watcher.
+	return nil
 }
 
 func (r *HelmChartInstallReconciler) SetupWithManager(mgr ctrl.Manager) error {
