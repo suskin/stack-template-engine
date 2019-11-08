@@ -70,3 +70,7 @@ CONTROLLER_GEN=$(GOBIN)/controller-gen
 else
 CONTROLLER_GEN=$(shell which controller-gen)
 endif
+
+helpers:
+	docker build . -f helm.Dockerfile --tag 'crossplane/helm-engine:latest'
+	docker build . -f kubectl.Dockerfile --tag 'crossplane/kubectl:latest'
