@@ -26,3 +26,23 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - helm.samples.stacks.crossplane.io
+  resources:
+  - stackconfigurations
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - helm.samples.stacks.crossplane.io
+  resources:
+  - stackconfigurations/status
+  verbs:
+  - get
+  - patch
+  - update

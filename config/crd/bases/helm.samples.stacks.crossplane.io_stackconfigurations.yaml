@@ -4,18 +4,18 @@ apiVersion: apiextensions.k8s.io/v1beta1
 kind: CustomResourceDefinition
 metadata:
   creationTimestamp: null
-  name: helmchartinstalls.helm.samples.stacks.crossplane.io
+  name: stackconfigurations.helm.samples.stacks.crossplane.io
 spec:
   group: helm.samples.stacks.crossplane.io
   names:
-    kind: HelmChartInstall
-    listKind: HelmChartInstallList
-    plural: helmchartinstalls
-    singular: helmchartinstall
+    kind: StackConfiguration
+    listKind: StackConfigurationList
+    plural: stackconfigurations
+    singular: stackconfiguration
   scope: ""
   validation:
     openAPIV3Schema:
-      description: HelmChartInstall is the Schema for the helmchartinstalls API
+      description: StackConfiguration is the Schema for the stackconfigurations API
       properties:
         apiVersion:
           description: 'APIVersion defines the versioned schema of this representation
@@ -30,10 +30,29 @@ spec:
         metadata:
           type: object
         spec:
-          description: HelmChartInstallSpec defines the desired state of HelmChartInstall
+          description: StackConfigurationSpec defines the desired state of StackConfiguration
+          properties:
+            behaviors:
+              description: 'INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
+                Important: Run "make" to regenerate code after modifying this file'
+              properties:
+                crds:
+                  additionalProperties:
+                    description: StackConfigurationBehavior specifies an individual
+                      behavior, by listing resources which should be processed.
+                    properties:
+                      resources:
+                        items:
+                          type: string
+                        type: array
+                    required:
+                    - resources
+                    type: object
+                  type: object
+              type: object
           type: object
         status:
-          description: HelmChartInstallStatus defines the observed state of HelmChartInstall
+          description: StackConfigurationStatus defines the observed state of StackConfiguration
           type: object
       type: object
   version: v1alpha1

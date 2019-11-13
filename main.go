@@ -69,6 +69,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "HelmChartInstall")
 		os.Exit(1)
 	}
+	if err = (&controllers.StackConfigurationReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("controllers").WithName("StackConfiguration"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StackConfiguration")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	setupLog.Info("starting manager")

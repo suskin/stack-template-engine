@@ -139,6 +139,7 @@ func (r *HelmChartInstallReconciler) processConfiguration(
 	resourceConfigurationDestinationDir := "/usr/share/resource-configuration/"
 	targetNamespace := claim.GetNamespace()
 
+	// TODO we should generate a name and save a reference on the claim
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "helm-template-apply",
