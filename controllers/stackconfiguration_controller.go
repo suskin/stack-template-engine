@@ -22,7 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	helmv1alpha1 "github.com/suskin/stack-helm/api/v1alpha1"
+	helmv1alpha1 "github.com/suskin/stack-template-engine/api/v1alpha1"
 )
 
 // StackConfigurationReconciler reconciles a StackConfiguration object

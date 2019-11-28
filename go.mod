@@ -1,4 +1,4 @@
-module github.com/suskin/stack-helm
+module github.com/suskin/stack-template-engine
 
 go 1.12
 

@@ -29,7 +29,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	helmv1alpha1 "github.com/suskin/stack-helm/api/v1alpha1"
+	"github.com/suskin/stack-template-engine/api/v1alpha1"
+	helmv1alpha1 "github.com/suskin/stack-template-engine/api/v1alpha1"
 
 	"github.com/crossplaneio/crossplane-runtime/pkg/meta"
 )
@@ -80,7 +81,7 @@ func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *helmv1al
 	*/
 
 	// configuration is a typed object
-	configuration, err := r.getStackConfiguration()
+	configuration, err := r.getStackConfiguration(ctx, claim)
 
 	// TODO the status will have more than *just* the result in it,
 	// but we can start with just the result
@@ -96,7 +97,10 @@ func (r *HelmChartInstallReconciler) getClaim() (unstructured.Unstructured, erro
 	return unstructured.Unstructured{}, nil
 }
 
-func (r *HelmChartInstallReconciler) getStackConfiguration() (unstructured.Unstructured, error) {
+func (r *HelmChartInstallReconciler) getStackConfiguration(
+	ctx context.Context,
+	claim *v1alpha1.HelmChartInstall,
+) (v1alpha1.StackConfiguration, error) {
 	// See the template stacks internal design doc for details, but
 	// the most likely source of the stack configuration is the stack object itself.
 	// Other potential sources include a configmap
@@ -106,20 +110,32 @@ func (r *HelmChartInstallReconciler) getStackConfiguration() (unstructured.Unstr
 	// - Stack configuration will be coming from a Kubernetes object, probably the
 	//   Stack itself
 	//stackConfiguration := ''
-	return unstructured.Unstructured{}, nil
+	namespacedName, err := client.ObjectKeyFromObject(claim)
+
+	if err != nil {
+		r.Log.V(0).Info("getStackConfiguration returning early because of error creating object key", "err", err, "claim", claim)
+		return v1alpha1.StackConfiguration{}, err
+	}
+
+	configuration := v1alpha1.StackConfiguration{}
+	if err := r.Client.Get(ctx, namespacedName, &configuration); err != nil {
+		r.Log.V(0).Info("getStackConfiguration returning early because of error fetching configuration", "err", err, "claim", claim)
+		return v1alpha1.StackConfiguration{}, err
+	}
+
+	r.Log.V(0).Info("getStackConfiguration returning configuration", "configuration", configuration)
+	return configuration, nil
 }
 
 func (r *HelmChartInstallReconciler) processConfiguration(
 	ctx context.Context,
 	claim *helmv1alpha1.HelmChartInstall,
-	configuration unstructured.Unstructured,
+	configuration v1alpha1.StackConfiguration,
 ) (unstructured.Unstructured, error) {
 	// Given a claim and a stack configuration, transform the claim into something
 	// to inject into a stack's configuration renderer, and then render the Stack's
 	// resources from the configuration and the transformed claim
-	ownerRef := meta.AsOwner(meta.ReferenceTo(claim, claim.GroupVersionKind()))
-	var jobBackoff int32
-	jobBackoff = 0
+
 	// TODO Handle multiple resource dirs. Perhaps try rolling everything into a single job,
 	//      so have multiple engine containers, one for each path.
 	//      And multiple apply containers; one for each path. Or, make multiple jobs.
@@ -127,9 +143,68 @@ func (r *HelmChartInstallReconciler) processConfiguration(
 	//      being outsourced
 
 	// TODO resource dir will come from the stack configuration
-	targetResourceDir := "myResourceDir"
-	// TODO target stack image will come from the claim
-	targetStackImage := "crossplane/template-stack:latest"
+	// TODO for each CRD, set up some watches, configured to trigger the configured hooks
+	targetResourceGroupVersion, targetResourceKind := claim.GetObjectKind().GroupVersionKind().ToAPIVersionAndKind()
+	targetGroupKindVersion := fmt.Sprintf("%s.%s", targetResourceKind, targetResourceGroupVersion)
+
+	var targetResourceBehavior v1alpha1.StackConfigurationBehavior
+	// TODO handle missing keys gracefully
+	targetResourceBehavior, ok := configuration.Spec.Behaviors.CRDs[targetGroupKindVersion]
+
+	if !ok {
+		// TODO error condition with a real error returned
+		r.Log.V(0).Info("Couldn't find a configured behavior!",
+			"claim", claim,
+			"configuration", configuration,
+			"targetGroupKindVersion", targetGroupKindVersion,
+		)
+		return unstructured.Unstructured{}, nil
+
+	}
+
+	if len(targetResourceBehavior.Resources) == 0 {
+		// TODO error condition with a real error returned
+		// TODO it'd be nice to enforce this on acceptance or creation if possible
+		r.Log.V(0).Info("Couldn't find resources for configured behavior!", "claim", claim, "configuration", configuration)
+		return unstructured.Unstructured{}, nil
+
+	}
+
+	targetStackImage := configuration.Spec.Source.Image
+
+	r.executeBehavior(ctx, claim, targetStackImage, &targetResourceBehavior)
+
+	return unstructured.Unstructured{}, nil
+}
+
+func (r *HelmChartInstallReconciler) executeBehavior(
+	ctx context.Context,
+	claim *v1alpha1.HelmChartInstall,
+	targetStackImage string,
+	behavior *v1alpha1.StackConfigurationBehavior,
+) (unstructured.Unstructured, error) {
+	for _, resource := range behavior.Resources {
+		// TODO error handling
+		r.executeHook(ctx, claim, targetStackImage, resource)
+	}
+	return unstructured.Unstructured{}, nil
+}
+
+// TODO we could have a method create the job, and a higher-level one execute it.
+func (r *HelmChartInstallReconciler) executeHook(
+	ctx context.Context,
+	claim *v1alpha1.HelmChartInstall,
+	targetStackImage string,
+	targetResourceDir string,
+) (unstructured.Unstructured, error) {
+	ownerRef := meta.AsOwner(meta.ReferenceTo(claim, claim.GroupVersionKind()))
+	var jobBackoff int32
+	jobBackoff = 0
+
+	// TODO target stack image will come from the stack object, or maybe the stack install object.
+	// Then for each resource behavior hook, we want to run the hook
+	// TODO update this to use the most recent format, where a hook is a structured object
+
 	resourceDirName := fmt.Sprintf("/.registry/resources/%s", targetResourceDir)
 
 	stackConfigurationVolumeName := "stack-configuration"
@@ -142,8 +217,8 @@ func (r *HelmChartInstallReconciler) processConfiguration(
 	// TODO we should generate a name and save a reference on the claim
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "helm-template-apply",
-			Namespace: targetNamespace,
+			GenerateName: "helm-template-apply-",
+			Namespace:    targetNamespace,
 			OwnerReferences: []metav1.OwnerReference{
 				ownerRef,
 			},
@@ -240,7 +315,7 @@ func (r *HelmChartInstallReconciler) processConfiguration(
 		},
 	}
 
-	if err := r.Create(ctx, job); err != nil {
+	if err := r.Client.Create(ctx, job); err != nil {
 		return unstructured.Unstructured{}, err
 	}
 
