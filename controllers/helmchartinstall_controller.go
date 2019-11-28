@@ -59,9 +59,41 @@ func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 
 	r.Log.V(0).Info("Hello World!", "instanceName", req.NamespacedName, "instance", i)
 
+	// FIXME TODO we are conflating the setup and render phases here, because originally
+	// I was writing this controller as an experiment for a controller which only supported
+	// rendering.
+	//
+	// Here's what we want in the long run, for a controller which supports both:
+	// - Setup phase: reads configuration, and sets up event handlers. An event handler has:
+	//   * A target CRD GVK (specified by the stack configuration for the behavior)
+	//   * A watcher (the controller would create this, to watch CRDs of the desired type)
+	//   * A set of hooks (specified by the stack configuration for the behavior). Each hook
+	//     takes in a set of configuration and the triggering CRD, and outputs some K8s resources
+	// - Render phase: this is what happens when a hook is triggered, and the hook runs
+	//   * Inputs:
+	//     ^ A claim, which is the object which triggered the render
+	//     ^ A behavior, which has all of the configuration for what should happen now
+	//       that the render has been triggered
+	//   * Outputs:
+	//     ^ Changes to new or existing K8s resources
+	//     ^ The result of the render (probably as the status of the claim)
+	//       + The job which was run
+	//       + The result of the job
+	//       + The logs of the job (maybe; it might be too much)
+
+	// TODO remaining functionality for the render phase:
+	// - Inject values from a claim
+	//   * Potential implementation: turn the values into a config map, then inject it into
+	//     the configuration engine job using a config map volume mapping
+	// - Surface the job result somehow (for usability)
+	// - Support for deletion, unless we assume that garbage collection will do it for us
 	r.render(ctx, i)
 
 	return ctrl.Result{}, nil
+}
+
+func (r *HelmChartInstallReconciler) setup(ctx context.Context, stack *helmv1alpha1.HelmChartInstall) error {
+	return nil
 }
 
 func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *helmv1alpha1.HelmChartInstall) error {
@@ -78,6 +110,8 @@ func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *helmv1al
 	- Watch for new types being provided by stacks
 	- When there is a new type provided, watch for instances being created
 	- When an instance is created, feed it into the renderer
+
+	TODO This could use a bit of refactoring so it flows more nicely
 	*/
 
 	// configuration is a typed object
@@ -106,10 +140,8 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 	// Other potential sources include a configmap
 
 	// TODO
-	// - Stack configuration should be a structured object
 	// - Stack configuration will be coming from a Kubernetes object, probably the
 	//   Stack itself
-	//stackConfiguration := ''
 	namespacedName, err := client.ObjectKeyFromObject(claim)
 
 	if err != nil {
@@ -136,13 +168,9 @@ func (r *HelmChartInstallReconciler) processConfiguration(
 	// to inject into a stack's configuration renderer, and then render the Stack's
 	// resources from the configuration and the transformed claim
 
-	// TODO Handle multiple resource dirs. Perhaps try rolling everything into a single job,
-	//      so have multiple engine containers, one for each path.
-	//      And multiple apply containers; one for each path. Or, make multiple jobs.
 	// TODO we may want some of these steps to be in this controller instead of
 	//      being outsourced
 
-	// TODO resource dir will come from the stack configuration
 	// TODO for each CRD, set up some watches, configured to trigger the configured hooks
 	targetResourceGroupVersion, targetResourceKind := claim.GetObjectKind().GroupVersionKind().ToAPIVersionAndKind()
 	targetGroupKindVersion := fmt.Sprintf("%s.%s", targetResourceKind, targetResourceGroupVersion)
