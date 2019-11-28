@@ -27,6 +27,16 @@ type StackConfigurationSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 	Behaviors StackConfigurationBehaviors `json:"behaviors,omitempty"`
+	Source    StackConfigurationSource    `json:"source,omitempty"`
+}
+
+// StackConfigurationSource
+type StackConfigurationSource struct {
+	// a container image id
+	// TODO use the same image object as a pod
+	Image string `json:"image,omitempty"`
+	// a url, probably to a git repo
+	URL string `json:"url,omitempty"`
 }
 
 // StackConfigurationBehaviors specifies behaviors for the stack

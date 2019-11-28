@@ -50,6 +50,17 @@ spec:
                     type: object
                   type: object
               type: object
+            source:
+              description: StackConfigurationSource
+              properties:
+                image:
+                  description: a container image id TODO use the same image object
+                    as a pod
+                  type: string
+                url:
+                  description: a url, probably to a git repo
+                  type: string
+              type: object
           type: object
         status:
           description: StackConfigurationStatus defines the observed state of StackConfiguration
