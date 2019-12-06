@@ -33,6 +33,10 @@ import (
 	helmv1alpha1 "github.com/suskin/stack-template-engine/api/v1alpha1"
 
 	"github.com/crossplaneio/crossplane-runtime/pkg/meta"
+	"sigs.k8s.io/yaml"
+
+	//generate "k8s.io/kubectl/pkg/generate/versioned"
+	"k8s.io/kubectl/pkg/util/hash"
 )
 
 // HelmChartInstallReconciler reconciles a HelmChartInstall object
@@ -200,20 +204,102 @@ func (r *HelmChartInstallReconciler) processConfiguration(
 
 	targetStackImage := configuration.Spec.Source.Image
 
-	r.executeBehavior(ctx, claim, targetStackImage, &targetResourceBehavior)
+	engineConfig, _ := r.createBehaviorEngineConfiguration(ctx, claim, &configuration)
+	// TODO error handling
+
+	r.executeBehavior(ctx, claim, engineConfig, targetStackImage, &targetResourceBehavior)
 
 	return unstructured.Unstructured{}, nil
+}
+
+/**
+ * When a behavior executes, the resource engine is configured by the
+ * object which triggered the behavior.
+ */
+func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
+	ctx context.Context,
+	claim *v1alpha1.HelmChartInstall,
+	stackConfig *v1alpha1.StackConfiguration,
+) (*corev1.ConfigMap, error) {
+	// yamlyamlyamlyamlyaml
+	configContents, _ := yaml.Marshal(claim.Spec)
+	// TODO handle errors
+
+	// Underneath, the yamler uses https://godoc.org/encoding/json#Marshal,
+	// which means that the bytes are UTF-8 encoded
+	stringConfigContents := fmt.Sprint(configContents)
+
+	// TODO get the engine type from the configuration
+	engineType := r.getEngineType(claim, stackConfig)
+
+	// TODO engine type should have a bit more structure;
+	// probably better to use an enum type pattern, with an
+	// engine name and its corresponding configuration file
+	// name in the same object
+	configKeyName := ""
+
+	if engineType == "helm2" {
+		configKeyName = "values.yaml"
+	}
+
+	/*
+		configGenerator := generate.ConfigMapGeneratorV1{
+			Name:           claim.GetUID(),
+			LiteralSources: fmt.Sprintf("%s=%s", configKeyName, stringConfigContents),
+			AppendHash:     true,
+		}
+	*/
+
+	configName := string(claim.GetUID())
+	generatedMap, _ := generateConfigMap(configName, configKeyName, stringConfigContents)
+	// TODO handle errors
+
+	err := r.Client.Create(ctx, generatedMap)
+	// TODO handle errors
+
+	return generatedMap, err
+}
+
+// The main reason this exists as its own method is to encapsulate the hashing logic
+func generateConfigMap(name string, fileName string, fileContents string) (*corev1.ConfigMap, error) {
+	configMap := &corev1.ConfigMap{}
+	configMap.Name = name
+	configMap.Data = map[string]string{}
+
+	configMap.Data[fileName] = fileContents
+	h, err := hash.ConfigMapHash(configMap)
+	if err != nil {
+		return configMap, err
+	}
+	configMap.Name = fmt.Sprintf("%s-%s", configMap.Name, h)
+
+	return configMap, nil
+}
+
+/**
+ * This is in its own method because it will involve
+ * reading through multiple levels of the configuration to see
+ * what the engine type is. It may even involve inferring an engine
+ * type based on the stack contents (though that may happen earlier
+ * in the lifecycle than this).
+ */
+func (r *HelmChartInstallReconciler) getEngineType(
+	claim *v1alpha1.HelmChartInstall,
+	stackConfig *v1alpha1.StackConfiguration,
+) string {
+	return "helm2"
 }
 
 func (r *HelmChartInstallReconciler) executeBehavior(
 	ctx context.Context,
 	claim *v1alpha1.HelmChartInstall,
+	engineConfiguration *corev1.ConfigMap,
 	targetStackImage string,
 	behavior *v1alpha1.StackConfigurationBehavior,
 ) (unstructured.Unstructured, error) {
 	for _, resource := range behavior.Resources {
 		// TODO error handling
-		r.executeHook(ctx, claim, targetStackImage, resource)
+		r.executeHook(ctx, claim, engineConfiguration, targetStackImage, resource)
 	}
 	return unstructured.Unstructured{}, nil
 }
@@ -222,6 +308,7 @@ func (r *HelmChartInstallReconciler) executeBehavior(
 func (r *HelmChartInstallReconciler) executeHook(
 	ctx context.Context,
 	claim *v1alpha1.HelmChartInstall,
+	engineConfig *corev1.ConfigMap,
 	targetStackImage string,
 	targetResourceDir string,
 ) (unstructured.Unstructured, error) {
@@ -234,6 +321,9 @@ func (r *HelmChartInstallReconciler) executeHook(
 	// TODO update this to use the most recent format, where a hook is a structured object
 
 	resourceDirName := fmt.Sprintf("/.registry/resources/%s", targetResourceDir)
+
+	engineConfigurationVolumeName := "engine-configuration"
+	engineConfigurationDir := "/usr/share/engine-configuration/"
 
 	stackConfigurationVolumeName := "stack-configuration"
 	stackContentsDestinationDir := "/usr/share/input/"
@@ -294,6 +384,10 @@ func (r *HelmChartInstallReconciler) executeHook(
 									Name:      resourceConfigurationVolumeName,
 									MountPath: resourceConfigurationDestinationDir,
 								},
+								{
+									Name:      engineConfigurationVolumeName,
+									MountPath: engineConfigurationDir,
+								},
 							},
 							ImagePullPolicy: corev1.PullNever,
 						},
@@ -335,6 +429,16 @@ func (r *HelmChartInstallReconciler) executeHook(
 							Name: resourceConfigurationVolumeName,
 							VolumeSource: corev1.VolumeSource{
 								EmptyDir: &corev1.EmptyDirVolumeSource{},
+							},
+						},
+						{
+							Name: engineConfigurationVolumeName,
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: engineConfig.GetName(),
+									},
+								},
 							},
 						},
 					},

@@ -54,7 +54,7 @@ func (in *HelmChartInstall) DeepCopyObject() runtime.Object {
 func (in *HelmChartInstallList) DeepCopyInto(out *HelmChartInstallList) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
-	out.ListMeta = in.ListMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
 	if in.Items != nil {
 		in, out := &in.Items, &out.Items
 		*out = make([]HelmChartInstall, len(*in))
@@ -185,7 +185,7 @@ func (in *StackConfigurationBehaviors) DeepCopy() *StackConfigurationBehaviors {
 func (in *StackConfigurationList) DeepCopyInto(out *StackConfigurationList) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
-	out.ListMeta = in.ListMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
 	if in.Items != nil {
 		in, out := &in.Items, &out.Items
 		*out = make([]StackConfiguration, len(*in))
