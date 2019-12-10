@@ -28,6 +28,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/suskin/stack-template-engine/api/v1alpha1"
 	helmv1alpha1 "github.com/suskin/stack-template-engine/api/v1alpha1"
@@ -52,8 +53,22 @@ func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 	ctx := context.Background()
 	_ = r.Log.WithValues("helmchartinstall", req.NamespacedName)
 
-	// your logic here
-	i := &helmv1alpha1.HelmChartInstall{}
+	// TODO NOTE the group, version, and kind would normally come from the
+	// stack configuration, and would be part of the configuration for the render
+	// callback
+	// We grab the claim as an unstructured so that we can have the same code handle
+	// arbitrary claim types. The types will be erased by this point, so if a stack
+	// author wants to validate the schema of a claim, they can do it by putting a
+	// schema in the CRD of the claim type so that the claim's schema is validated
+	// at the time that the object is accepted by the api server.
+	i := &unstructured.Unstructured{}
+	i.SetGroupVersionKind(
+		schema.GroupVersionKind{
+			Group:   "helm.samples.stacks.crossplane.io",
+			Version: "v1alpha1",
+			Kind:    "HelmChartInstall",
+		},
+	)
 	if err := r.Client.Get(ctx, req.NamespacedName, i); err != nil {
 		if kerrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -100,7 +115,7 @@ func (r *HelmChartInstallReconciler) setup(ctx context.Context, stack *helmv1alp
 	return nil
 }
 
-func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *helmv1alpha1.HelmChartInstall) error {
+func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *unstructured.Unstructured) error {
 	/**
 	* Steps to rendering:
 	- Grab the original claim
@@ -137,7 +152,7 @@ func (r *HelmChartInstallReconciler) getClaim() (unstructured.Unstructured, erro
 
 func (r *HelmChartInstallReconciler) getStackConfiguration(
 	ctx context.Context,
-	claim *v1alpha1.HelmChartInstall,
+	claim *unstructured.Unstructured,
 ) (v1alpha1.StackConfiguration, error) {
 	// See the template stacks internal design doc for details, but
 	// the most likely source of the stack configuration is the stack object itself.
@@ -165,9 +180,9 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 
 func (r *HelmChartInstallReconciler) processConfiguration(
 	ctx context.Context,
-	claim *helmv1alpha1.HelmChartInstall,
+	claim *unstructured.Unstructured,
 	configuration v1alpha1.StackConfiguration,
-) (unstructured.Unstructured, error) {
+) (*unstructured.Unstructured, error) {
 	// Given a claim and a stack configuration, transform the claim into something
 	// to inject into a stack's configuration renderer, and then render the Stack's
 	// resources from the configuration and the transformed claim
@@ -190,7 +205,7 @@ func (r *HelmChartInstallReconciler) processConfiguration(
 			"configuration", configuration,
 			"targetGroupKindVersion", targetGroupKindVersion,
 		)
-		return unstructured.Unstructured{}, nil
+		return nil, nil
 
 	}
 
@@ -198,36 +213,61 @@ func (r *HelmChartInstallReconciler) processConfiguration(
 		// TODO error condition with a real error returned
 		// TODO it'd be nice to enforce this on acceptance or creation if possible
 		r.Log.V(0).Info("Couldn't find resources for configured behavior!", "claim", claim, "configuration", configuration)
-		return unstructured.Unstructured{}, nil
+		return nil, nil
 
 	}
 
 	targetStackImage := configuration.Spec.Source.Image
 
-	engineConfig, _ := r.createBehaviorEngineConfiguration(ctx, claim, &configuration)
+	engineConfig, err := r.createBehaviorEngineConfiguration(ctx, claim, &configuration)
 	// TODO error handling
+
+	if err != nil {
+		r.Log.Error(err, "Error creating engine configuration!", "claim", claim)
+		return nil, err
+	}
 
 	r.executeBehavior(ctx, claim, engineConfig, targetStackImage, &targetResourceBehavior)
 
-	return unstructured.Unstructured{}, nil
+	return nil, nil
 }
 
 /**
  * When a behavior executes, the resource engine is configured by the
  * object which triggered the behavior.
+ *
+ * TODO Currently creation fails if the config map already exists, but it should
+ * succeed instead.
  */
 func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 	ctx context.Context,
-	claim *v1alpha1.HelmChartInstall,
+	claim *unstructured.Unstructured,
 	stackConfig *v1alpha1.StackConfiguration,
 ) (*corev1.ConfigMap, error) {
 	// yamlyamlyamlyamlyaml
-	configContents, _ := yaml.Marshal(claim.Spec)
-	// TODO handle errors
+	// TODO if spec is missing, that won't work very well
+	spec, ok := claim.Object["spec"]
+
+	if !ok {
+		r.Log.V(0).Info("Spec not found on claim; not creating engine configuration", "claim", claim)
+	}
+
+	r.Log.V(0).Info("Converting configuration", "spec", spec)
+	configContents, err := yaml.Marshal(spec)
+
+	r.Log.V(0).Info("Configuration contents as yaml", "configContents", configContents)
+
+	if err != nil {
+		r.Log.Error(err, "Error marshaling claim spec as yaml!", "claim", claim)
+		return nil, err
+	}
 
 	// Underneath, the yamler uses https://godoc.org/encoding/json#Marshal,
 	// which means that the bytes are UTF-8 encoded
-	stringConfigContents := fmt.Sprint(configContents)
+	// Theoretically we could get better performance by using a binary config
+	// map, but having a string makes it better for humans who may want to observe
+	// or troubleshoot behavior.
+	stringConfigContents := string(configContents)
 
 	// TODO get the engine type from the configuration
 	engineType := r.getEngineType(claim, stackConfig)
@@ -251,17 +291,29 @@ func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 	*/
 
 	configName := string(claim.GetUID())
-	generatedMap, _ := generateConfigMap(configName, configKeyName, stringConfigContents)
-	// TODO handle errors
+	generatedMap, err := r.generateConfigMap(configName, configKeyName, stringConfigContents)
 
-	err := r.Client.Create(ctx, generatedMap)
-	// TODO handle errors
+	if err != nil {
+		r.Log.V(0).Info("Error generating config map!", "claim", claim, "error", err)
+		return nil, err
+	}
+
+	generatedMap.SetNamespace(claim.GetNamespace())
+
+	r.Log.V(0).Info("Generated config map to pass engine configuration", "configMap", generatedMap)
+
+	err = r.Client.Create(ctx, generatedMap)
+
+	if err != nil {
+		r.Log.V(0).Info("Error creating config map!", "claim", claim, "error", err, "configMap", generatedMap)
+		return nil, err
+	}
 
 	return generatedMap, err
 }
 
 // The main reason this exists as its own method is to encapsulate the hashing logic
-func generateConfigMap(name string, fileName string, fileContents string) (*corev1.ConfigMap, error) {
+func (r *HelmChartInstallReconciler) generateConfigMap(name string, fileName string, fileContents string) (*corev1.ConfigMap, error) {
 	configMap := &corev1.ConfigMap{}
 	configMap.Name = name
 	configMap.Data = map[string]string{}
@@ -269,6 +321,7 @@ func generateConfigMap(name string, fileName string, fileContents string) (*core
 	configMap.Data[fileName] = fileContents
 	h, err := hash.ConfigMapHash(configMap)
 	if err != nil {
+		r.Log.V(0).Info("Error hashing config map!", "error", err)
 		return configMap, err
 	}
 	configMap.Name = fmt.Sprintf("%s-%s", configMap.Name, h)
@@ -284,7 +337,7 @@ func generateConfigMap(name string, fileName string, fileContents string) (*core
  * in the lifecycle than this).
  */
 func (r *HelmChartInstallReconciler) getEngineType(
-	claim *v1alpha1.HelmChartInstall,
+	claim *unstructured.Unstructured,
 	stackConfig *v1alpha1.StackConfiguration,
 ) string {
 	return "helm2"
@@ -292,7 +345,7 @@ func (r *HelmChartInstallReconciler) getEngineType(
 
 func (r *HelmChartInstallReconciler) executeBehavior(
 	ctx context.Context,
-	claim *v1alpha1.HelmChartInstall,
+	claim *unstructured.Unstructured,
 	engineConfiguration *corev1.ConfigMap,
 	targetStackImage string,
 	behavior *v1alpha1.StackConfigurationBehavior,
@@ -307,11 +360,14 @@ func (r *HelmChartInstallReconciler) executeBehavior(
 // TODO we could have a method create the job, and a higher-level one execute it.
 func (r *HelmChartInstallReconciler) executeHook(
 	ctx context.Context,
-	claim *v1alpha1.HelmChartInstall,
+	claim *unstructured.Unstructured,
 	engineConfig *corev1.ConfigMap,
 	targetStackImage string,
 	targetResourceDir string,
 ) (unstructured.Unstructured, error) {
+	// TODO if there is no config specified, either use an empty config or don't specify
+	// one at all.
+
 	ownerRef := meta.AsOwner(meta.ReferenceTo(claim, claim.GroupVersionKind()))
 	var jobBackoff int32
 	jobBackoff = 0
@@ -324,6 +380,7 @@ func (r *HelmChartInstallReconciler) executeHook(
 
 	engineConfigurationVolumeName := "engine-configuration"
 	engineConfigurationDir := "/usr/share/engine-configuration/"
+	engineConfigurationFile := fmt.Sprintf("%svalues.yaml", engineConfigurationDir)
 
 	stackConfigurationVolumeName := "stack-configuration"
 	stackContentsDestinationDir := "/usr/share/input/"
@@ -373,6 +430,7 @@ func (r *HelmChartInstallReconciler) executeHook(
 								"template",
 								"--output-dir", resourceConfigurationDestinationDir,
 								"--namespace", targetNamespace,
+								"--values", engineConfigurationFile,
 								stackContentsDestinationDir,
 							},
 							VolumeMounts: []corev1.VolumeMount{
@@ -455,7 +513,7 @@ func (r *HelmChartInstallReconciler) executeHook(
 }
 
 func (r *HelmChartInstallReconciler) setClaimStatus(
-	claim *helmv1alpha1.HelmChartInstall, result unstructured.Unstructured,
+	claim *unstructured.Unstructured, result *unstructured.Unstructured,
 ) error {
 	// The claim is the CR that triggered this whole thing.
 	// The result is the result of trying to apply or delete the templates rendered from processing the claim.
