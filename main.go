@@ -62,16 +62,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controllers.HelmChartInstallReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("HelmChartInstall"),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "HelmChartInstall")
-		os.Exit(1)
-	}
 	if err = (&controllers.StackConfigurationReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("StackConfiguration"),
+		Client:  mgr.GetClient(),
+		Log:     ctrl.Log.WithName("controllers").WithName("StackConfiguration"),
+		Manager: mgr,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StackConfiguration")
 		os.Exit(1)
