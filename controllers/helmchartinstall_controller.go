@@ -36,7 +36,6 @@ import (
 	"github.com/crossplaneio/crossplane-runtime/pkg/meta"
 	"sigs.k8s.io/yaml"
 
-	//generate "k8s.io/kubectl/pkg/generate/versioned"
 	"k8s.io/kubectl/pkg/util/hash"
 )
 
@@ -101,9 +100,6 @@ func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 	//       + The logs of the job (maybe; it might be too much)
 
 	// TODO remaining functionality for the render phase:
-	// - Inject values from a claim
-	//   * Potential implementation: turn the values into a config map, then inject it into
-	//     the configuration engine job using a config map volume mapping
 	// - Surface the job result somehow (for usability)
 	// - Support for deletion, unless we assume that garbage collection will do it for us
 	r.render(ctx, i)
@@ -153,7 +149,7 @@ func (r *HelmChartInstallReconciler) getClaim() (unstructured.Unstructured, erro
 func (r *HelmChartInstallReconciler) getStackConfiguration(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
-) (v1alpha1.StackConfiguration, error) {
+) (*v1alpha1.StackConfiguration, error) {
 	// See the template stacks internal design doc for details, but
 	// the most likely source of the stack configuration is the stack object itself.
 	// Other potential sources include a configmap
@@ -165,13 +161,13 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 
 	if err != nil {
 		r.Log.V(0).Info("getStackConfiguration returning early because of error creating object key", "err", err, "claim", claim)
-		return v1alpha1.StackConfiguration{}, err
+		return nil, err
 	}
 
-	configuration := v1alpha1.StackConfiguration{}
-	if err := r.Client.Get(ctx, namespacedName, &configuration); err != nil {
+	configuration := &v1alpha1.StackConfiguration{}
+	if err := r.Client.Get(ctx, namespacedName, configuration); err != nil {
 		r.Log.V(0).Info("getStackConfiguration returning early because of error fetching configuration", "err", err, "claim", claim)
-		return v1alpha1.StackConfiguration{}, err
+		return nil, err
 	}
 
 	r.Log.V(0).Info("getStackConfiguration returning configuration", "configuration", configuration)
@@ -181,7 +177,7 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 func (r *HelmChartInstallReconciler) processConfiguration(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
-	configuration v1alpha1.StackConfiguration,
+	configuration *v1alpha1.StackConfiguration,
 ) (*unstructured.Unstructured, error) {
 	// Given a claim and a stack configuration, transform the claim into something
 	// to inject into a stack's configuration renderer, and then render the Stack's
@@ -219,8 +215,7 @@ func (r *HelmChartInstallReconciler) processConfiguration(
 
 	targetStackImage := configuration.Spec.Source.Image
 
-	engineConfig, err := r.createBehaviorEngineConfiguration(ctx, claim, &configuration)
-	// TODO error handling
+	engineConfig, err := r.createBehaviorEngineConfiguration(ctx, claim, configuration)
 
 	if err != nil {
 		r.Log.Error(err, "Error creating engine configuration!", "claim", claim)
@@ -234,7 +229,8 @@ func (r *HelmChartInstallReconciler) processConfiguration(
 
 /**
  * When a behavior executes, the resource engine is configured by the
- * object which triggered the behavior.
+ * object which triggered the behavior. This method encapsulates the logic to
+ * create the resource engine configuration from the object's fields.
  *
  * TODO Currently creation fails if the config map already exists, but it should
  * succeed instead.
@@ -281,14 +277,6 @@ func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 	if engineType == "helm2" {
 		configKeyName = "values.yaml"
 	}
-
-	/*
-		configGenerator := generate.ConfigMapGeneratorV1{
-			Name:           claim.GetUID(),
-			LiteralSources: fmt.Sprintf("%s=%s", configKeyName, stringConfigContents),
-			AppendHash:     true,
-		}
-	*/
 
 	configName := string(claim.GetUID())
 	generatedMap, err := r.generateConfigMap(configName, configKeyName, stringConfigContents)
