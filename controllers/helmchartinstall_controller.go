@@ -55,6 +55,7 @@ func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 	// TODO NOTE the group, version, and kind would normally come from the
 	// stack configuration, and would be part of the configuration for the render
 	// callback
+	//
 	// We grab the claim as an unstructured so that we can have the same code handle
 	// arbitrary claim types. The types will be erased by this point, so if a stack
 	// author wants to validate the schema of a claim, they can do it by putting a
@@ -131,19 +132,34 @@ func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *unstruct
 
 	// configuration is a typed object
 	configuration, err := r.getStackConfiguration(ctx, claim)
+	// TODO check for errors
 
-	// TODO the status will have more than *just* the result in it,
-	// but we can start with just the result
-	result, err := r.processConfiguration(ctx, claim, configuration)
+	targetResourceBehavior, err := r.getBehavior(ctx, claim, configuration)
+
+	if targetResourceBehavior == nil {
+		// TODO error condition with a real error returned
+		r.Log.V(0).Info("Couldn't find a configured behavior!",
+			"claim", claim,
+			"configuration", configuration,
+		)
+		return err
+	}
+
+	engineConfig, err := r.createBehaviorEngineConfiguration(ctx, claim, configuration)
+
+	if err != nil {
+		r.Log.Error(err, "Error creating engine configuration!", "claim", claim)
+		return err
+	}
+
+	targetStackImage := configuration.Spec.Source.Image
+
+	result, err := r.executeBehavior(ctx, claim, engineConfig, targetStackImage, targetResourceBehavior)
+	// TODO check for errors
 
 	err = r.setClaimStatus(claim, result)
 
 	return err
-}
-
-func (r *HelmChartInstallReconciler) getClaim() (unstructured.Unstructured, error) {
-	// The claim is the CR that triggered this whole thing.
-	return unstructured.Unstructured{}, nil
 }
 
 func (r *HelmChartInstallReconciler) getStackConfiguration(
@@ -174,19 +190,17 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 	return configuration, nil
 }
 
-func (r *HelmChartInstallReconciler) processConfiguration(
+/**
+ * When a behavior is triggered, we want to know which behavior exactly we are executing.
+ *
+ * In most cases, this will probably be configured ahead of time by the setup controller, rather
+ * than being fetched at runtime by the render controller.
+ */
+func (r *HelmChartInstallReconciler) getBehavior(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
 	configuration *v1alpha1.StackConfiguration,
-) (*unstructured.Unstructured, error) {
-	// Given a claim and a stack configuration, transform the claim into something
-	// to inject into a stack's configuration renderer, and then render the Stack's
-	// resources from the configuration and the transformed claim
-
-	// TODO we may want some of these steps to be in this controller instead of
-	//      being outsourced
-
-	// TODO for each CRD, set up some watches, configured to trigger the configured hooks
+) (*v1alpha1.StackConfigurationBehavior, error) {
 	targetResourceGroupVersion, targetResourceKind := claim.GetObjectKind().GroupVersionKind().ToAPIVersionAndKind()
 	targetGroupKindVersion := fmt.Sprintf("%s.%s", targetResourceKind, targetResourceGroupVersion)
 
@@ -213,18 +227,7 @@ func (r *HelmChartInstallReconciler) processConfiguration(
 
 	}
 
-	targetStackImage := configuration.Spec.Source.Image
-
-	engineConfig, err := r.createBehaviorEngineConfiguration(ctx, claim, configuration)
-
-	if err != nil {
-		r.Log.Error(err, "Error creating engine configuration!", "claim", claim)
-		return nil, err
-	}
-
-	r.executeBehavior(ctx, claim, engineConfig, targetStackImage, &targetResourceBehavior)
-
-	return nil, nil
+	return &targetResourceBehavior, nil
 }
 
 /**
@@ -337,12 +340,14 @@ func (r *HelmChartInstallReconciler) executeBehavior(
 	engineConfiguration *corev1.ConfigMap,
 	targetStackImage string,
 	behavior *v1alpha1.StackConfigurationBehavior,
-) (unstructured.Unstructured, error) {
+) (*unstructured.Unstructured, error) {
 	for _, resource := range behavior.Resources {
 		// TODO error handling
+		// TODO use result
 		r.executeHook(ctx, claim, engineConfiguration, targetStackImage, resource)
 	}
-	return unstructured.Unstructured{}, nil
+	// TODO return a real result
+	return &unstructured.Unstructured{}, nil
 }
 
 // TODO we could have a method create the job, and a higher-level one execute it.
@@ -352,7 +357,7 @@ func (r *HelmChartInstallReconciler) executeHook(
 	engineConfig *corev1.ConfigMap,
 	targetStackImage string,
 	targetResourceDir string,
-) (unstructured.Unstructured, error) {
+) (*unstructured.Unstructured, error) {
 	// TODO if there is no config specified, either use an empty config or don't specify
 	// one at all.
 
@@ -494,10 +499,10 @@ func (r *HelmChartInstallReconciler) executeHook(
 	}
 
 	if err := r.Client.Create(ctx, job); err != nil {
-		return unstructured.Unstructured{}, err
+		return nil, err
 	}
 
-	return unstructured.Unstructured{}, nil
+	return &unstructured.Unstructured{}, nil
 }
 
 func (r *HelmChartInstallReconciler) setClaimStatus(
