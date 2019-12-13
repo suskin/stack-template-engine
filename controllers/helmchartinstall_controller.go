@@ -41,6 +41,7 @@ import (
 type HelmChartInstallReconciler struct {
 	Client client.Client
 	Log    logr.Logger
+	GVK    *schema.GroupVersionKind
 }
 
 const (
@@ -65,13 +66,7 @@ func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 	// schema in the CRD of the claim type so that the claim's schema is validated
 	// at the time that the object is accepted by the api server.
 	i := &unstructured.Unstructured{}
-	i.SetGroupVersionKind(
-		schema.GroupVersionKind{
-			Group:   "helm.samples.stacks.crossplane.io",
-			Version: "v1alpha1",
-			Kind:    "HelmChartInstall",
-		},
-	)
+	i.SetGroupVersionKind(*r.GVK)
 	if err := r.Client.Get(ctx, req.NamespacedName, i); err != nil {
 		if kerrors.IsNotFound(err) {
 			return ctrl.Result{}, nil

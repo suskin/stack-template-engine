@@ -18,6 +18,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -34,9 +35,14 @@ import (
 
 // StackConfigurationReconciler reconciles a StackConfiguration object
 type StackConfigurationReconciler struct {
-	client.Client
-	Log logr.Logger
-	manager.Manager
+	Client  client.Client
+	Log     logr.Logger
+	Manager manager.Manager
+}
+
+type Behavior struct {
+	cfg *v1alpha1.StackConfigurationBehavior
+	gvk *schema.GroupVersionKind
 }
 
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=stackconfigurations,verbs=get;list;watch;create;update;patch;delete
@@ -73,28 +79,51 @@ func (r *StackConfigurationReconciler) setup(config *v1alpha1.StackConfiguration
 	// - Create a render controller, passing it the configuration values
 
 	/* Questions
-	 * Should we grab all of the configuration at setup time, or at render time?
-	 * - At render time, so that we're always using the latest version of the object
-	 * - Though, the ideal would be if we cached the configuration and changed it if it changed
-	 */
+	Should we grab all of the configuration at setup time, or at render time?
+	- At render time, so that we're always using the latest version of the object
+	- Though, the ideal would be if we cached the configuration and changed it if it changed
+	*/
 
 	// behaviors := config.Spec.Behaviors
 	// Even though this is using a type which is part of the manager's scheme and which is a type
 	// known at compile time, this has also been tested with types which are neither (such as Crossplane's
 	// KubernetesApplication), and it works for that too.
-	gvk := &schema.GroupVersionKind{
-		Group:   "helm.samples.stacks.crossplane.io",
-		Version: "v1alpha1",
-		Kind:    "HelmChartInstall",
-	}
 
-	err := r.NewRenderController(gvk)
+	behaviors := r.getBehaviors(config)
 
-	if err != nil {
-		r.Log.Error(err, "Error creating new render controller!", "gvk", gvk)
+	for _, behavior := range behaviors {
+		gvk := behavior.gvk
+
+		if err := r.NewRenderController(gvk); err != nil {
+			// TODO what do we want to do if some of the registrations succeed and some of them fail?
+			r.Log.Error(err, "Error creating new render controller!", "gvk", gvk)
+		}
 	}
 
 	return nil
+}
+
+// This exists because getting the individual behaviors may be a bit tricker in the future.
+// For example, the engine may be configured at multiple levels. Another example is that
+// behaviors may be configured at multiple levels, if there are stack-level behaviors in
+// addition to object-level behaviors.
+func (r *StackConfigurationReconciler) getBehaviors(config *v1alpha1.StackConfiguration) []Behavior {
+	scbs := config.Spec.Behaviors.CRDs
+
+	behaviors := make([]Behavior, 0)
+
+	for rawGvk, scb := range scbs {
+		// We are assuming strings look like "Kind.group.com/version"
+		gvkSplit := strings.SplitN(rawGvk, ".", 2)
+		gvk := schema.FromAPIVersionAndKind(gvkSplit[1], gvkSplit[0])
+
+		behaviors = append(behaviors, Behavior{
+			gvk: &gvk,
+			cfg: &scb,
+		})
+	}
+
+	return behaviors
 }
 
 func (r *StackConfigurationReconciler) NewRenderController(gvk *schema.GroupVersionKind) error {
@@ -111,7 +140,8 @@ func (r *StackConfigurationReconciler) NewRenderController(gvk *schema.GroupVers
 
 	reconciler := (&HelmChartInstallReconciler{
 		Client: r.Manager.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName(fmt.Sprintf("%s.%s/%s", gvk.Kind, gvk.Group, gvk.Kind)),
+		Log:    ctrl.Log.WithName("controllers").WithName(fmt.Sprintf("%s.%s/%s", gvk.Kind, gvk.Group, gvk.Version)),
+		GVK:    gvk,
 	})
 
 	r.Log.V(0).Info("Adding new controller to manager")
