@@ -22,7 +22,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	helmv1alpha1 "github.com/suskin/stack-helm/api/v1alpha1"
+	helmv1alpha1 "github.com/suskin/stack-template-engine/api/v1alpha1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"

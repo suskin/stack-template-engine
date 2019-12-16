@@ -19,8 +19,8 @@ import (
 	"flag"
 	"os"
 
-	helmv1alpha1 "github.com/suskin/stack-helm/api/v1alpha1"
-	"github.com/suskin/stack-helm/controllers"
+	helmv1alpha1 "github.com/suskin/stack-template-engine/api/v1alpha1"
+	"github.com/suskin/stack-template-engine/controllers"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
