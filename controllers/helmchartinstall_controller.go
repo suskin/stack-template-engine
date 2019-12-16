@@ -353,7 +353,6 @@ func (r *HelmChartInstallReconciler) executeHook(
 
 	ownerRef := meta.AsOwner(meta.ReferenceTo(claim, claim.GroupVersionKind()))
 	var jobBackoff int32
-	jobBackoff = 0
 
 	// TODO target stack image will come from the stack object, or maybe the stack install object.
 	// Then for each resource behavior hook, we want to run the hook
