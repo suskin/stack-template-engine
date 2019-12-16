@@ -45,6 +45,7 @@ type HelmChartInstallReconciler struct {
 
 const (
 	timeout = 60 * time.Second
+	spec    = "spec"
 )
 
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls,verbs=get;list;watch;create;update;patch;delete
@@ -238,14 +239,14 @@ func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 ) (*corev1.ConfigMap, error) {
 	// yamlyamlyamlyamlyaml
 	// TODO if spec is missing, that won't work very well
-	spec, ok := claim.Object["spec"]
+	s, ok := claim.Object[spec]
 
 	if !ok {
 		r.Log.V(0).Info("Spec not found on claim; not creating engine configuration", "claim", claim)
 	}
 
-	r.Log.V(0).Info("Converting configuration", "spec", spec)
-	configContents, err := yaml.Marshal(spec)
+	r.Log.V(0).Info("Converting configuration", "spec", s)
+	configContents, err := yaml.Marshal(s)
 
 	r.Log.V(0).Info("Configuration contents as yaml", "configContents", configContents)
 
