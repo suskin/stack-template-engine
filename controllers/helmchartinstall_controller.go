@@ -18,6 +18,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/crossplaneio/crossplane-runtime/pkg/meta"
 	"github.com/go-logr/logr"
@@ -42,12 +43,16 @@ type HelmChartInstallReconciler struct {
 	Log logr.Logger
 }
 
+const (
+	timeout = 60 * time.Second
+)
+
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls/status,verbs=get;update;patch
 
 func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	ctx := context.Background()
-	_ = r.Log.WithValues("helmchartinstall", req.NamespacedName)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
 	// TODO NOTE the group, version, and kind would normally come from the
 	// stack configuration, and would be part of the configuration for the render
