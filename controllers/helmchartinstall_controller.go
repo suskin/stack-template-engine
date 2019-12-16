@@ -131,30 +131,30 @@ func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *unstruct
 	*/
 
 	// configuration is a typed object
-	configuration, err := r.getStackConfiguration(ctx, claim)
+	config, err := r.getStackConfiguration(ctx, claim)
 	// TODO check for errors
 
-	targetResourceBehavior, err := r.getBehavior(ctx, claim, configuration)
+	trb, err := r.getBehavior(ctx, claim, config)
 
-	if targetResourceBehavior == nil {
+	if trb == nil {
 		// TODO error condition with a real error returned
 		r.Log.V(0).Info("Couldn't find a configured behavior!",
 			"claim", claim,
-			"configuration", configuration,
+			"configuration", config,
 		)
 		return err
 	}
 
-	engineConfig, err := r.createBehaviorEngineConfiguration(ctx, claim, configuration)
+	engineConfig, err := r.createBehaviorEngineConfiguration(ctx, claim, config)
 
 	if err != nil {
 		r.Log.Error(err, "Error creating engine configuration!", "claim", claim)
 		return err
 	}
 
-	targetStackImage := configuration.Spec.Source.Image
+	stackImage := config.Spec.Source.Image
 
-	result, err := r.executeBehavior(ctx, claim, engineConfig, targetStackImage, targetResourceBehavior)
+	result, err := r.executeBehavior(ctx, claim, engineConfig, stackImage, trb)
 	// TODO check for errors
 
 	err = r.setClaimStatus(claim, result)
@@ -173,21 +173,21 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 	// TODO
 	// - Stack configuration will be coming from a Kubernetes object, probably the
 	//   Stack itself
-	namespacedName, err := client.ObjectKeyFromObject(claim)
+	name, err := client.ObjectKeyFromObject(claim)
 
 	if err != nil {
 		r.Log.V(0).Info("getStackConfiguration returning early because of error creating object key", "err", err, "claim", claim)
 		return nil, err
 	}
 
-	configuration := &v1alpha1.StackConfiguration{}
-	if err := r.Client.Get(ctx, namespacedName, configuration); err != nil {
+	config := &v1alpha1.StackConfiguration{}
+	if err := r.Client.Get(ctx, name, config); err != nil {
 		r.Log.V(0).Info("getStackConfiguration returning early because of error fetching configuration", "err", err, "claim", claim)
 		return nil, err
 	}
 
-	r.Log.V(0).Info("getStackConfiguration returning configuration", "configuration", configuration)
-	return configuration, nil
+	r.Log.V(0).Info("getStackConfiguration returning configuration", "configuration", config)
+	return config, nil
 }
 
 /**
@@ -199,35 +199,35 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 func (r *HelmChartInstallReconciler) getBehavior(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
-	configuration *v1alpha1.StackConfiguration,
+	config *v1alpha1.StackConfiguration,
 ) (*v1alpha1.StackConfigurationBehavior, error) {
-	targetResourceGroupVersion, targetResourceKind := claim.GetObjectKind().GroupVersionKind().ToAPIVersionAndKind()
-	targetGroupKindVersion := fmt.Sprintf("%s.%s", targetResourceKind, targetResourceGroupVersion)
+	gv, k := claim.GetObjectKind().GroupVersionKind().ToAPIVersionAndKind()
+	gvk := fmt.Sprintf("%s.%s", k, gv)
 
-	var targetResourceBehavior v1alpha1.StackConfigurationBehavior
+	var scb v1alpha1.StackConfigurationBehavior
 	// TODO handle missing keys gracefully
-	targetResourceBehavior, ok := configuration.Spec.Behaviors.CRDs[targetGroupKindVersion]
+	scb, ok := config.Spec.Behaviors.CRDs[gvk]
 
 	if !ok {
 		// TODO error condition with a real error returned
 		r.Log.V(0).Info("Couldn't find a configured behavior!",
 			"claim", claim,
-			"configuration", configuration,
-			"targetGroupKindVersion", targetGroupKindVersion,
+			"configuration", config,
+			"targetGroupKindVersion", gvk,
 		)
 		return nil, nil
 
 	}
 
-	if len(targetResourceBehavior.Resources) == 0 {
+	if len(scb.Resources) == 0 {
 		// TODO error condition with a real error returned
 		// TODO it'd be nice to enforce this on acceptance or creation if possible
-		r.Log.V(0).Info("Couldn't find resources for configured behavior!", "claim", claim, "configuration", configuration)
+		r.Log.V(0).Info("Couldn't find resources for configured behavior!", "claim", claim, "configuration", config)
 		return nil, nil
 
 	}
 
-	return &targetResourceBehavior, nil
+	return &scb, nil
 }
 
 /**
@@ -337,14 +337,14 @@ func (r *HelmChartInstallReconciler) getEngineType(
 func (r *HelmChartInstallReconciler) executeBehavior(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
-	engineConfiguration *corev1.ConfigMap,
+	engineConfig *corev1.ConfigMap,
 	targetStackImage string,
 	behavior *v1alpha1.StackConfigurationBehavior,
 ) (*unstructured.Unstructured, error) {
 	for _, resource := range behavior.Resources {
 		// TODO error handling
 		// TODO use result
-		r.executeHook(ctx, claim, engineConfiguration, targetStackImage, resource)
+		r.executeHook(ctx, claim, engineConfig, targetStackImage, resource)
 	}
 	// TODO return a real result
 	return &unstructured.Unstructured{}, nil
@@ -369,7 +369,7 @@ func (r *HelmChartInstallReconciler) executeHook(
 	// Then for each resource behavior hook, we want to run the hook
 	// TODO update this to use the most recent format, where a hook is a structured object
 
-	resourceDirName := fmt.Sprintf("/.registry/resources/%s", targetResourceDir)
+	resourceDir := fmt.Sprintf("/.registry/resources/%s", targetResourceDir)
 
 	engineConfigurationVolumeName := "engine-configuration"
 	engineConfigurationDir := "/usr/share/engine-configuration/"
@@ -380,13 +380,13 @@ func (r *HelmChartInstallReconciler) executeHook(
 
 	resourceConfigurationVolumeName := "resource-configuration"
 	resourceConfigurationDestinationDir := "/usr/share/resource-configuration/"
-	targetNamespace := claim.GetNamespace()
+	namespace := claim.GetNamespace()
 
 	// TODO we should generate a name and save a reference on the claim
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "helm-template-apply-",
-			Namespace:    targetNamespace,
+			Namespace:    namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				ownerRef,
 			},
@@ -403,7 +403,7 @@ func (r *HelmChartInstallReconciler) executeHook(
 							Command: []string{
 								// The "." suffix causes the cp -R to copy the contents of the directory instead of
 								// the directory itself
-								"cp", "-R", fmt.Sprintf("%s/.", resourceDirName), stackContentsDestinationDir,
+								"cp", "-R", fmt.Sprintf("%s/.", resourceDir), stackContentsDestinationDir,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
@@ -422,7 +422,7 @@ func (r *HelmChartInstallReconciler) executeHook(
 							Args: []string{
 								"template",
 								"--output-dir", resourceConfigurationDestinationDir,
-								"--namespace", targetNamespace,
+								"--namespace", namespace,
 								"--values", engineConfigurationFile,
 								stackContentsDestinationDir,
 							},
@@ -455,7 +455,7 @@ func (r *HelmChartInstallReconciler) executeHook(
 							},
 							Args: []string{
 								"apply",
-								"--namespace", targetNamespace,
+								"--namespace", namespace,
 								"-R",
 								"-f",
 								resourceConfigurationDestinationDir,
