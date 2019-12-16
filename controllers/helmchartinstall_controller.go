@@ -113,22 +113,20 @@ func (r *HelmChartInstallReconciler) setup(ctx context.Context, stack *helmv1alp
 }
 
 func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *unstructured.Unstructured) error {
-	/**
-	* Steps to rendering:
-	- Grab the original claim
-	- Load the stack's stack.yaml configuration
-	- From the stack.yaml, load the stack's configuration to be processed
-	- Process the configuration as specified
-	- Grab the output / result, and Apply the output or report the failure
-	- Report the result to the status of the original claim
-
-	Other steps:
-	- Watch for new types being provided by stacks
-	- When there is a new type provided, watch for instances being created
-	- When an instance is created, feed it into the renderer
-
-	TODO This could use a bit of refactoring so it flows more nicely
-	*/
+	// Steps to rendering:
+	// - Grab the original claim
+	// - Load the stack's stack.yaml configuration
+	// - From the stack.yaml, load the stack's configuration to be processed
+	// - Process the configuration as specified
+	// - Grab the output / result, and Apply the output or report the failure
+	// - Report the result to the status of the original claim
+	//
+	// Other steps:
+	// - Watch for new types being provided by stacks
+	// - When there is a new type provided, watch for instances being created
+	// - When an instance is created, feed it into the renderer
+	//
+	// TODO This could use a bit of refactoring so it flows more nicely
 
 	// configuration is a typed object
 	config, err := r.getStackConfiguration(ctx, claim)
@@ -190,12 +188,10 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 	return config, nil
 }
 
-/**
- * When a behavior is triggered, we want to know which behavior exactly we are executing.
- *
- * In most cases, this will probably be configured ahead of time by the setup controller, rather
- * than being fetched at runtime by the render controller.
- */
+// When a behavior is triggered, we want to know which behavior exactly we are executing.
+//
+// In most cases, this will probably be configured ahead of time by the setup controller, rather
+// than being fetched at runtime by the render controller.
 func (r *HelmChartInstallReconciler) getBehavior(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
@@ -230,14 +226,12 @@ func (r *HelmChartInstallReconciler) getBehavior(
 	return &scb, nil
 }
 
-/**
- * When a behavior executes, the resource engine is configured by the
- * object which triggered the behavior. This method encapsulates the logic to
- * create the resource engine configuration from the object's fields.
- *
- * TODO Currently creation fails if the config map already exists, but it should
- * succeed instead.
- */
+// When a behavior executes, the resource engine is configured by the
+// object which triggered the behavior. This method encapsulates the logic to
+// create the resource engine configuration from the object's fields.
+//
+// TODO Currently creation fails if the config map already exists, but it should
+// succeed instead.
 func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
@@ -320,13 +314,11 @@ func (r *HelmChartInstallReconciler) generateConfigMap(name string, fileName str
 	return configMap, nil
 }
 
-/**
- * This is in its own method because it will involve
- * reading through multiple levels of the configuration to see
- * what the engine type is. It may even involve inferring an engine
- * type based on the stack contents (though that may happen earlier
- * in the lifecycle than this).
- */
+// This is in its own method because it will involve
+// reading through multiple levels of the configuration to see
+// what the engine type is. It may even involve inferring an engine
+// type based on the stack contents (though that may happen earlier
+// in the lifecycle than this).
 func (r *HelmChartInstallReconciler) getEngineType(
 	claim *unstructured.Unstructured,
 	stackConfig *v1alpha1.StackConfiguration,
