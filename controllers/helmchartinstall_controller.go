@@ -105,9 +105,7 @@ func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 	// TODO remaining functionality for the render phase:
 	// - Surface the job result somehow (for usability)
 	// - Support for deletion, unless we assume that garbage collection will do it for us
-	r.render(ctx, i)
-
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, r.render(ctx, i)
 }
 
 func (r *HelmChartInstallReconciler) setup(ctx context.Context, stack *helmv1alpha1.HelmChartInstall) error {
