@@ -200,7 +200,6 @@ func (r *HelmChartInstallReconciler) getBehavior(
 	gv, k := claim.GetObjectKind().GroupVersionKind().ToAPIVersionAndKind()
 	gvk := fmt.Sprintf("%s.%s", k, gv)
 
-	var scb v1alpha1.StackConfigurationBehavior
 	// TODO handle missing keys gracefully
 	scb, ok := config.Spec.Behaviors.CRDs[gvk]
 
