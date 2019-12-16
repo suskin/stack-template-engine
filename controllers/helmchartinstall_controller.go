@@ -130,30 +130,30 @@ func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *unstruct
 	// TODO This could use a bit of refactoring so it flows more nicely
 
 	// configuration is a typed object
-	config, err := r.getStackConfiguration(ctx, claim)
+	cfg, err := r.getStackConfiguration(ctx, claim)
 	// TODO check for errors
 
-	trb, err := r.getBehavior(ctx, claim, config)
+	trb, err := r.getBehavior(ctx, claim, cfg)
 
 	if trb == nil {
 		// TODO error condition with a real error returned
 		r.Log.V(0).Info("Couldn't find a configured behavior!",
 			"claim", claim,
-			"configuration", config,
+			"configuration", cfg,
 		)
 		return err
 	}
 
-	engineConfig, err := r.createBehaviorEngineConfiguration(ctx, claim, config)
+	engineCfg, err := r.createBehaviorEngineConfiguration(ctx, claim, cfg)
 
 	if err != nil {
 		r.Log.Error(err, "Error creating engine configuration!", "claim", claim)
 		return err
 	}
 
-	stackImage := config.Spec.Source.Image
+	stackImage := cfg.Spec.Source.Image
 
-	result, err := r.executeBehavior(ctx, claim, engineConfig, stackImage, trb)
+	result, err := r.executeBehavior(ctx, claim, engineCfg, stackImage, trb)
 	// TODO check for errors
 
 	err = r.setClaimStatus(claim, result)
@@ -179,14 +179,14 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 		return nil, err
 	}
 
-	config := &v1alpha1.StackConfiguration{}
-	if err := r.Client.Get(ctx, name, config); err != nil {
+	sc := &v1alpha1.StackConfiguration{}
+	if err := r.Client.Get(ctx, name, sc); err != nil {
 		r.Log.V(0).Info("getStackConfiguration returning early because of error fetching configuration", "err", err, "claim", claim)
 		return nil, err
 	}
 
-	r.Log.V(0).Info("getStackConfiguration returning configuration", "configuration", config)
-	return config, nil
+	r.Log.V(0).Info("getStackConfiguration returning configuration", "configuration", sc)
+	return sc, nil
 }
 
 // When a behavior is triggered, we want to know which behavior exactly we are executing.
@@ -196,19 +196,19 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 func (r *HelmChartInstallReconciler) getBehavior(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
-	config *v1alpha1.StackConfiguration,
+	sc *v1alpha1.StackConfiguration,
 ) (*v1alpha1.StackConfigurationBehavior, error) {
 	gv, k := claim.GetObjectKind().GroupVersionKind().ToAPIVersionAndKind()
 	gvk := fmt.Sprintf("%s.%s", k, gv)
 
 	// TODO handle missing keys gracefully
-	scb, ok := config.Spec.Behaviors.CRDs[gvk]
+	scb, ok := sc.Spec.Behaviors.CRDs[gvk]
 
 	if !ok {
 		// TODO error condition with a real error returned
 		r.Log.V(0).Info("Couldn't find a configured behavior!",
 			"claim", claim,
-			"configuration", config,
+			"configuration", sc,
 			"targetGroupKindVersion", gvk,
 		)
 		return nil, nil
@@ -218,7 +218,7 @@ func (r *HelmChartInstallReconciler) getBehavior(
 	if len(scb.Resources) == 0 {
 		// TODO error condition with a real error returned
 		// TODO it'd be nice to enforce this on acceptance or creation if possible
-		r.Log.V(0).Info("Couldn't find resources for configured behavior!", "claim", claim, "configuration", config)
+		r.Log.V(0).Info("Couldn't find resources for configured behavior!", "claim", claim, "configuration", sc)
 		return nil, nil
 
 	}
@@ -235,7 +235,7 @@ func (r *HelmChartInstallReconciler) getBehavior(
 func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
-	stackConfig *v1alpha1.StackConfiguration,
+	sc *v1alpha1.StackConfiguration,
 ) (*corev1.ConfigMap, error) {
 	// yamlyamlyamlyamlyaml
 	// TODO if spec is missing, that won't work very well
@@ -263,7 +263,7 @@ func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 	stringConfigContents := string(configContents)
 
 	// TODO get the engine type from the configuration
-	engineType := r.getEngineType(claim, stackConfig)
+	engineType := r.getEngineType(claim, sc)
 
 	// TODO engine type should have a bit more structure;
 	// probably better to use an enum type pattern, with an
@@ -297,19 +297,19 @@ func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 
 // The main reason this exists as its own method is to encapsulate the hashing logic
 func (r *HelmChartInstallReconciler) generateConfigMap(name string, fileName string, fileContents string) (*corev1.ConfigMap, error) {
-	configMap := &corev1.ConfigMap{}
-	configMap.Name = name
-	configMap.Data = map[string]string{}
+	cm := &corev1.ConfigMap{}
+	cm.Name = name
+	cm.Data = map[string]string{}
 
-	configMap.Data[fileName] = fileContents
-	h, err := hash.ConfigMapHash(configMap)
+	cm.Data[fileName] = fileContents
+	h, err := hash.ConfigMapHash(cm)
 	if err != nil {
 		r.Log.V(0).Info("Error hashing config map!", "error", err)
-		return configMap, err
+		return cm, err
 	}
-	configMap.Name = fmt.Sprintf("%s-%s", configMap.Name, h)
+	cm.Name = fmt.Sprintf("%s-%s", cm.Name, h)
 
-	return configMap, nil
+	return cm, nil
 }
 
 // This is in its own method because it will involve
@@ -319,7 +319,7 @@ func (r *HelmChartInstallReconciler) generateConfigMap(name string, fileName str
 // in the lifecycle than this).
 func (r *HelmChartInstallReconciler) getEngineType(
 	claim *unstructured.Unstructured,
-	stackConfig *v1alpha1.StackConfiguration,
+	sc *v1alpha1.StackConfiguration,
 ) string {
 	return "helm2"
 }
@@ -327,14 +327,14 @@ func (r *HelmChartInstallReconciler) getEngineType(
 func (r *HelmChartInstallReconciler) executeBehavior(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
-	engineConfig *corev1.ConfigMap,
+	engineCfg *corev1.ConfigMap,
 	targetStackImage string,
 	behavior *v1alpha1.StackConfigurationBehavior,
 ) (*unstructured.Unstructured, error) {
 	for _, resource := range behavior.Resources {
 		// TODO error handling
 		// TODO use result
-		r.executeHook(ctx, claim, engineConfig, targetStackImage, resource)
+		r.executeHook(ctx, claim, engineCfg, targetStackImage, resource)
 	}
 	// TODO return a real result
 	return &unstructured.Unstructured{}, nil
@@ -344,7 +344,7 @@ func (r *HelmChartInstallReconciler) executeBehavior(
 func (r *HelmChartInstallReconciler) executeHook(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
-	engineConfig *corev1.ConfigMap,
+	engineCfg *corev1.ConfigMap,
 	targetStackImage string,
 	targetResourceDir string,
 ) (*unstructured.Unstructured, error) {
@@ -477,7 +477,7 @@ func (r *HelmChartInstallReconciler) executeHook(
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{
-										Name: engineConfig.GetName(),
+										Name: engineCfg.GetName(),
 									},
 								},
 							},
