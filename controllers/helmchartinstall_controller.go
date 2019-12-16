@@ -39,8 +39,8 @@ import (
 
 // HelmChartInstallReconciler reconciles a HelmChartInstall object
 type HelmChartInstallReconciler struct {
-	client.Client
-	Log logr.Logger
+	Client client.Client
+	Log    logr.Logger
 }
 
 const (
