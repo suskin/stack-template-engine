@@ -287,9 +287,7 @@ func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 
 	r.Log.V(0).Info("Generated config map to pass engine configuration", "configMap", generatedMap)
 
-	err = r.Client.Create(ctx, generatedMap)
-
-	if err != nil {
+	if err := r.Client.Create(ctx, generatedMap); err != nil {
 		r.Log.V(0).Info("Error creating config map!", "claim", claim, "error", err, "configMap", generatedMap)
 		return nil, err
 	}
