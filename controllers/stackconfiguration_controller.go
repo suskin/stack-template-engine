@@ -19,16 +19,16 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
-
 	batchv1 "k8s.io/api/batch/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	v1alpha1 "github.com/suskin/stack-template-engine/api/v1alpha1"
 )
@@ -45,15 +45,17 @@ type Behavior struct {
 	gvk *schema.GroupVersionKind
 }
 
+const (
+	setupTimeout = 60 * time.Second
+)
+
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=stackconfigurations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=stackconfigurations/status,verbs=get;update;patch
 
 func (r *StackConfigurationReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	ctx := context.Background()
-	_ = r.Log.WithValues("stackconfiguration", req.NamespacedName)
+	ctx, cancel := context.WithTimeout(context.Background(), setupTimeout)
+	defer cancel()
 
-	// your logic here
-	// r.setup()
 	i := &v1alpha1.StackConfiguration{}
 	if err := r.Client.Get(ctx, req.NamespacedName, i); err != nil {
 		if kerrors.IsNotFound(err) {
@@ -63,12 +65,11 @@ func (r *StackConfigurationReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 	}
 
 	r.Log.V(0).Info("Hello World!", "instanceName", req.NamespacedName, "instance", i)
-	_ = r.setup(i)
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, r.setup(i)
 }
 
-func (r *StackConfigurationReconciler) setup(config *v1alpha1.StackConfiguration) error {
+func (r *StackConfigurationReconciler) setup(sc *v1alpha1.StackConfiguration) error {
 	// For each behavior:
 	// - Grab the configuration values:
 	//   * Source stack; image or url
@@ -78,21 +79,15 @@ func (r *StackConfigurationReconciler) setup(config *v1alpha1.StackConfiguration
 	//     the behavior itself
 	// - Create a render controller, passing it the configuration values
 
-	/* Questions
-	Should we grab all of the configuration at setup time, or at render time?
-	- At render time, so that we're always using the latest version of the object
-	- Though, the ideal would be if we cached the configuration and changed it if it changed
-	*/
+	// Questions
+	// Should we grab all of the configuration at setup time, or at render time?
+	// - At render time, so that we're always using the latest version of the object
+	// - Though, the ideal would be if we cached the configuration and changed it if it changed
 
-	// behaviors := config.Spec.Behaviors
-	// Even though this is using a type which is part of the manager's scheme and which is a type
-	// known at compile time, this has also been tested with types which are neither (such as Crossplane's
-	// KubernetesApplication), and it works for that too.
+	behaviors := r.getBehaviors(sc)
 
-	behaviors := r.getBehaviors(config)
-
-	for _, behavior := range behaviors {
-		gvk := behavior.gvk
+	for _, b := range behaviors {
+		gvk := b.gvk
 
 		if err := r.NewRenderController(gvk); err != nil {
 			// TODO what do we want to do if some of the registrations succeed and some of them fail?
@@ -107,8 +102,8 @@ func (r *StackConfigurationReconciler) setup(config *v1alpha1.StackConfiguration
 // For example, the engine may be configured at multiple levels. Another example is that
 // behaviors may be configured at multiple levels, if there are stack-level behaviors in
 // addition to object-level behaviors.
-func (r *StackConfigurationReconciler) getBehaviors(config *v1alpha1.StackConfiguration) []Behavior {
-	scbs := config.Spec.Behaviors.CRDs
+func (r *StackConfigurationReconciler) getBehaviors(sc *v1alpha1.StackConfiguration) []Behavior {
+	scbs := sc.Spec.Behaviors.CRDs
 
 	behaviors := make([]Behavior, 0)
 
@@ -127,13 +122,10 @@ func (r *StackConfigurationReconciler) getBehaviors(config *v1alpha1.StackConfig
 }
 
 func (r *StackConfigurationReconciler) NewRenderController(gvk *schema.GroupVersionKind) error {
-	/**
-	TODO
-	- In the future, we may want to be able to stop listening when a stack is uninstalled.
-	- What if we have multiple controller workers watching the stack configuration? Do we need to worry about trying to not
-	  create multiple render controllers for a single gvk?
-	*/
-	// scheme
+	// TODO
+	// - In the future, we may want to be able to stop listening when a stack is uninstalled.
+	// - What if we have multiple controller workers watching the stack configuration? Do we need to worry about trying to not
+	//   create multiple render controllers for a single gvk?
 
 	apiType := &unstructured.Unstructured{}
 	apiType.SetGroupVersionKind(*gvk)

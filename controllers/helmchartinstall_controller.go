@@ -45,15 +45,15 @@ type HelmChartInstallReconciler struct {
 }
 
 const (
-	timeout = 60 * time.Second
-	spec    = "spec"
+	renderTimeout = 60 * time.Second
+	spec          = "spec"
 )
 
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls/status,verbs=get;update;patch
 
 func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), renderTimeout)
 	defer cancel()
 
 	// TODO NOTE the group, version, and kind would normally come from the
