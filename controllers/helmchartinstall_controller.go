@@ -19,24 +19,21 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crossplaneio/crossplane-runtime/pkg/meta"
 	"github.com/go-logr/logr"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/kubectl/pkg/util/hash"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 
 	"github.com/suskin/stack-template-engine/api/v1alpha1"
 	helmv1alpha1 "github.com/suskin/stack-template-engine/api/v1alpha1"
-
-	"github.com/crossplaneio/crossplane-runtime/pkg/meta"
-	"sigs.k8s.io/yaml"
-
-	"k8s.io/kubectl/pkg/util/hash"
 )
 
 // HelmChartInstallReconciler reconciles a HelmChartInstall object
