@@ -363,15 +363,15 @@ func (r *HelmChartInstallReconciler) executeHook(
 
 	resourceDir := fmt.Sprintf("/.registry/resources/%s", targetResourceDir)
 
-	engineConfigurationVolumeName := "engine-configuration"
-	engineConfigurationDir := "/usr/share/engine-configuration/"
-	engineConfigurationFile := fmt.Sprintf("%svalues.yaml", engineConfigurationDir)
+	engineCfgVolumeName := "engine-configuration"
+	engineCfgDir := "/usr/share/engine-configuration/"
+	engineCfgFile := fmt.Sprintf("%svalues.yaml", engineCfgDir)
 
-	stackConfigurationVolumeName := "stack-configuration"
-	stackContentsDestinationDir := "/usr/share/input/"
+	stackVolumeName := "stack-configuration"
+	stackDestDir := "/usr/share/input/"
 
-	resourceConfigurationVolumeName := "resource-configuration"
-	resourceConfigurationDestinationDir := "/usr/share/resource-configuration/"
+	resourceCfgVolumeName := "resource-configuration"
+	resourceCfgDestDir := "/usr/share/resource-configuration/"
 	namespace := claim.GetNamespace()
 
 	// TODO we should generate a name and save a reference on the claim
@@ -395,12 +395,12 @@ func (r *HelmChartInstallReconciler) executeHook(
 							Command: []string{
 								// The "." suffix causes the cp -R to copy the contents of the directory instead of
 								// the directory itself
-								"cp", "-R", fmt.Sprintf("%s/.", resourceDir), stackContentsDestinationDir,
+								"cp", "-R", fmt.Sprintf("%s/.", resourceDir), stackDestDir,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
-									Name:      stackConfigurationVolumeName,
-									MountPath: stackContentsDestinationDir,
+									Name:      stackVolumeName,
+									MountPath: stackDestDir,
 								},
 							},
 							ImagePullPolicy: corev1.PullNever,
@@ -413,23 +413,23 @@ func (r *HelmChartInstallReconciler) executeHook(
 							},
 							Args: []string{
 								"template",
-								"--output-dir", resourceConfigurationDestinationDir,
+								"--output-dir", resourceCfgDestDir,
 								"--namespace", namespace,
-								"--values", engineConfigurationFile,
-								stackContentsDestinationDir,
+								"--values", engineCfgFile,
+								stackDestDir,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
-									Name:      stackConfigurationVolumeName,
-									MountPath: stackContentsDestinationDir,
+									Name:      stackVolumeName,
+									MountPath: stackDestDir,
 								},
 								{
-									Name:      resourceConfigurationVolumeName,
-									MountPath: resourceConfigurationDestinationDir,
+									Name:      resourceCfgVolumeName,
+									MountPath: resourceCfgDestDir,
 								},
 								{
-									Name:      engineConfigurationVolumeName,
-									MountPath: engineConfigurationDir,
+									Name:      engineCfgVolumeName,
+									MountPath: engineCfgDir,
 								},
 							},
 							ImagePullPolicy: corev1.PullNever,
@@ -450,12 +450,12 @@ func (r *HelmChartInstallReconciler) executeHook(
 								"--namespace", namespace,
 								"-R",
 								"-f",
-								resourceConfigurationDestinationDir,
+								resourceCfgDestDir,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
-									Name:      resourceConfigurationVolumeName,
-									MountPath: resourceConfigurationDestinationDir,
+									Name:      resourceCfgVolumeName,
+									MountPath: resourceCfgDestDir,
 								},
 							},
 							ImagePullPolicy: corev1.PullNever,
@@ -463,19 +463,19 @@ func (r *HelmChartInstallReconciler) executeHook(
 					},
 					Volumes: []corev1.Volume{
 						{
-							Name: stackConfigurationVolumeName,
+							Name: stackVolumeName,
 							VolumeSource: corev1.VolumeSource{
 								EmptyDir: &corev1.EmptyDirVolumeSource{},
 							},
 						},
 						{
-							Name: resourceConfigurationVolumeName,
+							Name: resourceCfgVolumeName,
 							VolumeSource: corev1.VolumeSource{
 								EmptyDir: &corev1.EmptyDirVolumeSource{},
 							},
 						},
 						{
-							Name: engineConfigurationVolumeName,
+							Name: engineCfgVolumeName,
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{
