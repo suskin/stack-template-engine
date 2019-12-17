@@ -62,7 +62,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controllers.StackConfigurationReconciler{
+	if err = (&controllers.SetupPhaseReconciler{
 		Client:  mgr.GetClient(),
 		Log:     ctrl.Log.WithName("controllers").WithName("StackConfiguration"),
 		Manager: mgr,

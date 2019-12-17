@@ -34,7 +34,7 @@ import (
 )
 
 // StackConfigurationReconciler reconciles a StackConfiguration object
-type StackConfigurationReconciler struct {
+type SetupPhaseReconciler struct {
 	Client  client.Client
 	Log     logr.Logger
 	Manager manager.Manager
@@ -52,7 +52,7 @@ const (
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=stackconfigurations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=stackconfigurations/status,verbs=get;update;patch
 
-func (r *StackConfigurationReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
+func (r *SetupPhaseReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), setupTimeout)
 	defer cancel()
 
@@ -69,7 +69,7 @@ func (r *StackConfigurationReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 	return ctrl.Result{}, r.setup(i)
 }
 
-func (r *StackConfigurationReconciler) setup(sc *v1alpha1.StackConfiguration) error {
+func (r *SetupPhaseReconciler) setup(sc *v1alpha1.StackConfiguration) error {
 	// For each behavior:
 	// - Grab the configuration values:
 	//   * Source stack; image or url
@@ -102,7 +102,7 @@ func (r *StackConfigurationReconciler) setup(sc *v1alpha1.StackConfiguration) er
 // For example, the engine may be configured at multiple levels. Another example is that
 // behaviors may be configured at multiple levels, if there are stack-level behaviors in
 // addition to object-level behaviors.
-func (r *StackConfigurationReconciler) getBehaviors(sc *v1alpha1.StackConfiguration) []Behavior {
+func (r *SetupPhaseReconciler) getBehaviors(sc *v1alpha1.StackConfiguration) []Behavior {
 	scbs := sc.Spec.Behaviors.CRDs
 
 	behaviors := make([]Behavior, 0)
@@ -121,7 +121,7 @@ func (r *StackConfigurationReconciler) getBehaviors(sc *v1alpha1.StackConfigurat
 	return behaviors
 }
 
-func (r *StackConfigurationReconciler) NewRenderController(gvk *schema.GroupVersionKind) error {
+func (r *SetupPhaseReconciler) NewRenderController(gvk *schema.GroupVersionKind) error {
 	// TODO
 	// - In the future, we may want to be able to stop listening when a stack is uninstalled.
 	// - What if we have multiple controller workers watching the stack configuration? Do we need to worry about trying to not
@@ -151,7 +151,7 @@ func (r *StackConfigurationReconciler) NewRenderController(gvk *schema.GroupVers
 	return nil
 }
 
-func (r *StackConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *SetupPhaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.StackConfiguration{}).
 		Complete(r)
