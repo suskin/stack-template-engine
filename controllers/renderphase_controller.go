@@ -38,7 +38,7 @@ import (
 )
 
 // HelmChartInstallReconciler reconciles a HelmChartInstall object
-type HelmChartInstallReconciler struct {
+type RenderPhaseReconciler struct {
 	Client client.Client
 	Log    logr.Logger
 	GVK    *schema.GroupVersionKind
@@ -52,7 +52,7 @@ const (
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls/status,verbs=get;update;patch
 
-func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
+func (r *RenderPhaseReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), renderTimeout)
 	defer cancel()
 
@@ -104,11 +104,11 @@ func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 	return ctrl.Result{}, r.render(ctx, i)
 }
 
-func (r *HelmChartInstallReconciler) setup(ctx context.Context, stack *helmv1alpha1.HelmChartInstall) error {
+func (r *RenderPhaseReconciler) setup(ctx context.Context, stack *helmv1alpha1.HelmChartInstall) error {
 	return nil
 }
 
-func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *unstructured.Unstructured) error {
+func (r *RenderPhaseReconciler) render(ctx context.Context, claim *unstructured.Unstructured) error {
 	// Steps to rendering:
 	// - Grab the original claim
 	// - Load the stack's stack.yaml configuration
@@ -156,7 +156,7 @@ func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *unstruct
 	return err
 }
 
-func (r *HelmChartInstallReconciler) getStackConfiguration(
+func (r *RenderPhaseReconciler) getStackConfiguration(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
 ) (*v1alpha1.StackConfiguration, error) {
@@ -188,7 +188,7 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 //
 // In most cases, this will probably be configured ahead of time by the setup controller, rather
 // than being fetched at runtime by the render controller.
-func (r *HelmChartInstallReconciler) getBehavior(
+func (r *RenderPhaseReconciler) getBehavior(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
 	sc *v1alpha1.StackConfiguration,
@@ -227,7 +227,7 @@ func (r *HelmChartInstallReconciler) getBehavior(
 //
 // TODO Currently creation fails if the config map already exists, but it should
 // succeed instead.
-func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
+func (r *RenderPhaseReconciler) createBehaviorEngineConfiguration(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
 	sc *v1alpha1.StackConfiguration,
@@ -291,7 +291,7 @@ func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 }
 
 // The main reason this exists as its own method is to encapsulate the hashing logic
-func (r *HelmChartInstallReconciler) generateConfigMap(name string, fileName string, fileContents string) (*corev1.ConfigMap, error) {
+func (r *RenderPhaseReconciler) generateConfigMap(name string, fileName string, fileContents string) (*corev1.ConfigMap, error) {
 	cm := &corev1.ConfigMap{}
 	cm.Name = name
 	cm.Data = map[string]string{}
@@ -312,14 +312,14 @@ func (r *HelmChartInstallReconciler) generateConfigMap(name string, fileName str
 // what the engine type is. It may even involve inferring an engine
 // type based on the stack contents (though that may happen earlier
 // in the lifecycle than this).
-func (r *HelmChartInstallReconciler) getEngineType(
+func (r *RenderPhaseReconciler) getEngineType(
 	claim *unstructured.Unstructured,
 	sc *v1alpha1.StackConfiguration,
 ) string {
 	return "helm2"
 }
 
-func (r *HelmChartInstallReconciler) executeBehavior(
+func (r *RenderPhaseReconciler) executeBehavior(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
 	engineCfg *corev1.ConfigMap,
@@ -336,7 +336,7 @@ func (r *HelmChartInstallReconciler) executeBehavior(
 }
 
 // TODO we could have a method create the job, and a higher-level one execute it.
-func (r *HelmChartInstallReconciler) executeHook(
+func (r *RenderPhaseReconciler) executeHook(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
 	engineCfg *corev1.ConfigMap,
@@ -489,7 +489,7 @@ func (r *HelmChartInstallReconciler) executeHook(
 	return &unstructured.Unstructured{}, nil
 }
 
-func (r *HelmChartInstallReconciler) setClaimStatus(
+func (r *RenderPhaseReconciler) setClaimStatus(
 	claim *unstructured.Unstructured, result *unstructured.Unstructured,
 ) error {
 	// The claim is the CR that triggered this whole thing.
@@ -499,7 +499,7 @@ func (r *HelmChartInstallReconciler) setClaimStatus(
 	return nil
 }
 
-func (r *HelmChartInstallReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *RenderPhaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&helmv1alpha1.HelmChartInstall{}).
 		Complete(r)

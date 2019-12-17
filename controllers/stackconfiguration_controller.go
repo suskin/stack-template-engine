@@ -130,7 +130,7 @@ func (r *StackConfigurationReconciler) NewRenderController(gvk *schema.GroupVers
 	apiType := &unstructured.Unstructured{}
 	apiType.SetGroupVersionKind(*gvk)
 
-	reconciler := (&HelmChartInstallReconciler{
+	reconciler := (&RenderPhaseReconciler{
 		Client: r.Manager.GetClient(),
 		Log:    ctrl.Log.WithName("controllers").WithName(fmt.Sprintf("%s.%s/%s", gvk.Kind, gvk.Group, gvk.Version)),
 		GVK:    gvk,
