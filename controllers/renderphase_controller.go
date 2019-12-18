@@ -331,6 +331,11 @@ func (r *RenderPhaseReconciler) executeHook(
 	// TODO if there is no config specified, either use an empty config or don't specify
 	// one at all.
 
+	// TODO if we change this to meta.AsController, and we have the controller-runtime controller configured
+	// to Own Jobs, then we'll get a reconcile call when Jobs finish. However, we'd need to change the logic
+	// for the reconcile a bit to support that effectively. For example:
+	// - We wouldn't want to create jobs every time reconcile is run
+	//   * This means keeping track of created jobs somewhere and could also mean using deterministic job names
 	ownerRef := meta.AsOwner(meta.ReferenceTo(claim, claim.GroupVersionKind()))
 	var jobBackoff int32
 
