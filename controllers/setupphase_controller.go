@@ -88,8 +88,10 @@ func (r *SetupPhaseReconciler) setup(sc *v1alpha1.StackConfiguration) error {
 
 	for _, b := range behaviors {
 		gvk := b.gvk
+		// TODO we don't want to be hard-coding the event name here.
+		event := v1alpha1.EventName("reconcile")
 
-		if err := r.NewRenderController(gvk); err != nil {
+		if err := r.NewRenderController(gvk, event); err != nil {
 			// TODO what do we want to do if some of the registrations succeed and some of them fail?
 			r.Log.Error(err, "Error creating new render controller!", "gvk", gvk)
 		}
@@ -109,7 +111,7 @@ func (r *SetupPhaseReconciler) getBehaviors(sc *v1alpha1.StackConfiguration) []B
 
 	for rawGvk, scb := range scbs {
 		// We are assuming strings look like "Kind.group.com/version"
-		gvkSplit := strings.SplitN(rawGvk, ".", 2)
+		gvkSplit := strings.SplitN(string(rawGvk), ".", 2)
 		gvk := schema.FromAPIVersionAndKind(gvkSplit[1], gvkSplit[0])
 
 		behaviors = append(behaviors, Behavior{
@@ -121,7 +123,7 @@ func (r *SetupPhaseReconciler) getBehaviors(sc *v1alpha1.StackConfiguration) []B
 	return behaviors
 }
 
-func (r *SetupPhaseReconciler) NewRenderController(gvk *schema.GroupVersionKind) error {
+func (r *SetupPhaseReconciler) NewRenderController(gvk *schema.GroupVersionKind, event v1alpha1.EventName) error {
 	// TODO
 	// - In the future, we may want to be able to stop listening when a stack is uninstalled.
 	// - What if we have multiple controller workers watching the stack configuration? Do we need to worry about trying to not
@@ -131,9 +133,10 @@ func (r *SetupPhaseReconciler) NewRenderController(gvk *schema.GroupVersionKind)
 	apiType.SetGroupVersionKind(*gvk)
 
 	reconciler := (&RenderPhaseReconciler{
-		Client: r.Manager.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName(fmt.Sprintf("%s.%s/%s", gvk.Kind, gvk.Group, gvk.Version)),
-		GVK:    gvk,
+		Client:    r.Manager.GetClient(),
+		Log:       ctrl.Log.WithName("controllers").WithName(fmt.Sprintf("%s.%s/%s", gvk.Kind, gvk.Group, gvk.Version)),
+		GVK:       gvk,
+		EventName: event,
 	})
 
 	r.Log.V(0).Info("Adding new controller to manager")
