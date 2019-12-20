@@ -19,36 +19,55 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // StackConfigurationSpec defines the desired state of StackConfiguration
 type StackConfigurationSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 	Behaviors StackConfigurationBehaviors `json:"behaviors,omitempty"`
-	Source    StackConfigurationSource    `json:"source,omitempty"`
 }
 
-// StackConfigurationSource
+type ResourceEngineConfiguration struct {
+	Type string `json:"type"`
+}
+
+// StackConfigurationSource is the stack image which this stack configuration is from.
+// In the future, other source types may be supported, such as a URL.
 type StackConfigurationSource struct {
 	// a container image id
-	// TODO use the same image object as a pod
 	Image string `json:"image,omitempty"`
-	// a url, probably to a git repo
-	URL string `json:"url,omitempty"`
 }
 
 // StackConfigurationBehaviors specifies behaviors for the stack
-// Strings should be in GroupVersion format, so Kind.group
 type StackConfigurationBehaviors struct {
-	CRDs map[string]StackConfigurationBehavior `json:"crds,omitempty"`
+	CRDs   map[GVK]StackConfigurationBehavior `json:"crds,omitempty"`
+	Engine ResourceEngineConfiguration        `json:"engine,omitempty"`
+	// Theoretically, source and engine could be specified at a per-crd level or
+	// per-hook level as well.
+	Source StackConfigurationSource `json:"source,omitempty"`
 }
+
+// The GVK should be in domain format, so Kind.group/version
+type GVK string
 
 // StackConfigurationBehavior specifies an individual behavior, by listing resources
 // which should be processed.
 type StackConfigurationBehavior struct {
-	Resources []string `json:"resources"`
+	Hooks  map[EventName]HookConfigurations `json:"hooks"`
+	Engine ResourceEngineConfiguration      `json:"engine,omitempty"`
+}
+
+type HookConfigurations []HookConfiguration
+
+// EventName represents the lifecycle event that the controller should respond to.
+// There are certain events that are recognized.
+type EventName string
+
+// HookConfiguration is the configuration for an individual hook which will be
+// executed in response to an event.
+type HookConfiguration struct {
+	Engine    ResourceEngineConfiguration `json:"engine,omitempty"`
+	Directory string                      `json:"directory"`
 }
 
 // StackConfigurationStatus defines the observed state of StackConfiguration

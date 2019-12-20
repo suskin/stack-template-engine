@@ -37,41 +37,33 @@ import (
 	helmv1alpha1 "github.com/suskin/stack-template-engine/api/v1alpha1"
 )
 
-// HelmChartInstallReconciler reconciles a HelmChartInstall object
-type HelmChartInstallReconciler struct {
-	Client client.Client
-	Log    logr.Logger
+// RenderPhaseReconciler reconciles an object which we're watching for a template stack
+type RenderPhaseReconciler struct {
+	Client    client.Client
+	Log       logr.Logger
+	GVK       *schema.GroupVersionKind
+	EventName v1alpha1.EventName
 }
 
 const (
-	timeout = 60 * time.Second
-	spec    = "spec"
+	renderTimeout = 60 * time.Second
+	spec          = "spec"
 )
 
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls/status,verbs=get;update;patch
 
-func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func (r *RenderPhaseReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), renderTimeout)
 	defer cancel()
 
-	// TODO NOTE the group, version, and kind would normally come from the
-	// stack configuration, and would be part of the configuration for the render
-	// callback
-	//
 	// We grab the claim as an unstructured so that we can have the same code handle
 	// arbitrary claim types. The types will be erased by this point, so if a stack
 	// author wants to validate the schema of a claim, they can do it by putting a
 	// schema in the CRD of the claim type so that the claim's schema is validated
 	// at the time that the object is accepted by the api server.
 	i := &unstructured.Unstructured{}
-	i.SetGroupVersionKind(
-		schema.GroupVersionKind{
-			Group:   "helm.samples.stacks.crossplane.io",
-			Version: "v1alpha1",
-			Kind:    "HelmChartInstall",
-		},
-	)
+	i.SetGroupVersionKind(*r.GVK)
 	if err := r.Client.Get(ctx, req.NamespacedName, i); err != nil {
 		if kerrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -109,27 +101,7 @@ func (r *HelmChartInstallReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 	return ctrl.Result{}, r.render(ctx, i)
 }
 
-func (r *HelmChartInstallReconciler) setup(ctx context.Context, stack *helmv1alpha1.HelmChartInstall) error {
-	return nil
-}
-
-func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *unstructured.Unstructured) error {
-	// Steps to rendering:
-	// - Grab the original claim
-	// - Load the stack's stack.yaml configuration
-	// - From the stack.yaml, load the stack's configuration to be processed
-	// - Process the configuration as specified
-	// - Grab the output / result, and Apply the output or report the failure
-	// - Report the result to the status of the original claim
-	//
-	// Other steps:
-	// - Watch for new types being provided by stacks
-	// - When there is a new type provided, watch for instances being created
-	// - When an instance is created, feed it into the renderer
-	//
-	// TODO This could use a bit of refactoring so it flows more nicely
-
-	// configuration is a typed object
+func (r *RenderPhaseReconciler) render(ctx context.Context, claim *unstructured.Unstructured) error {
 	cfg, err := r.getStackConfiguration(ctx, claim)
 	// TODO check for errors
 
@@ -144,24 +116,27 @@ func (r *HelmChartInstallReconciler) render(ctx context.Context, claim *unstruct
 		return err
 	}
 
-	engineCfg, err := r.createBehaviorEngineConfiguration(ctx, claim, cfg)
+	for _, hookCfg := range trb {
+		engineCfg, err := r.createBehaviorEngineConfiguration(ctx, claim, &hookCfg)
 
-	if err != nil {
-		r.Log.Error(err, "Error creating engine configuration!", "claim", claim)
-		return err
+		if err != nil {
+			r.Log.Error(err, "Error creating engine configuration!", "claim", claim, "hook config", hookCfg)
+			return err
+		}
+
+		// TODO support specifying the image on the hook
+		stackImage := cfg.Spec.Behaviors.Source.Image
+
+		result, err := r.executeHook(ctx, claim, engineCfg, stackImage, &hookCfg)
+		// TODO check for errors
+
+		err = r.setClaimStatus(claim, result)
 	}
-
-	stackImage := cfg.Spec.Source.Image
-
-	result, err := r.executeBehavior(ctx, claim, engineCfg, stackImage, trb)
-	// TODO check for errors
-
-	err = r.setClaimStatus(claim, result)
 
 	return err
 }
 
-func (r *HelmChartInstallReconciler) getStackConfiguration(
+func (r *RenderPhaseReconciler) getStackConfiguration(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
 ) (*v1alpha1.StackConfiguration, error) {
@@ -193,13 +168,13 @@ func (r *HelmChartInstallReconciler) getStackConfiguration(
 //
 // In most cases, this will probably be configured ahead of time by the setup controller, rather
 // than being fetched at runtime by the render controller.
-func (r *HelmChartInstallReconciler) getBehavior(
+func (r *RenderPhaseReconciler) getBehavior(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
 	sc *v1alpha1.StackConfiguration,
-) (*v1alpha1.StackConfigurationBehavior, error) {
+) ([]v1alpha1.HookConfiguration, error) {
 	gv, k := claim.GetObjectKind().GroupVersionKind().ToAPIVersionAndKind()
-	gvk := fmt.Sprintf("%s.%s", k, gv)
+	gvk := v1alpha1.GVK(fmt.Sprintf("%s.%s", k, gv))
 
 	// TODO handle missing keys gracefully
 	scb, ok := sc.Spec.Behaviors.CRDs[gvk]
@@ -212,10 +187,21 @@ func (r *HelmChartInstallReconciler) getBehavior(
 			"targetGroupKindVersion", gvk,
 		)
 		return nil, nil
+	}
+
+	hooks := scb.Hooks
+
+	if len(hooks) == 0 {
+		// TODO error condition with a real error returned
+		// TODO it'd be nice to enforce this on acceptance or creation if possible
+		// TODO theoretically we should be able to enforce this at the schema level
+		r.Log.V(0).Info("Couldn't find hooks for configured behavior!", "claim", claim, "configuration", sc)
+		return nil, nil
 
 	}
 
-	if len(scb.Resources) == 0 {
+	hookCfgs := hooks[r.EventName]
+	if len(hookCfgs) == 0 {
 		// TODO error condition with a real error returned
 		// TODO it'd be nice to enforce this on acceptance or creation if possible
 		r.Log.V(0).Info("Couldn't find resources for configured behavior!", "claim", claim, "configuration", sc)
@@ -223,22 +209,40 @@ func (r *HelmChartInstallReconciler) getBehavior(
 
 	}
 
-	return &scb, nil
+	// If a directory is not provided, we will use the root of the stack artifact. However, it is recommended to
+	// specify a directory for clarity.
+	resolvedCfgs := make([]v1alpha1.HookConfiguration, 0)
+	for _, cfg := range hookCfgs {
+		// If no engine is specified at the hook level, we want to use the engine specified at the CRD level.
+		// If no engine is specified at the hook *or* CRD level, we want to use the engine specified at the configuration level.
+		if cfg.Engine.Type == "" {
+			if scb.Engine.Type != "" {
+				r.Log.V(0).Info("Inheriting engine for hook from CRD-level behavior configuration", "engineType", scb.Engine.Type)
+				cfg.Engine.Type = scb.Engine.Type
+			} else {
+				r.Log.V(0).Info("Inheriting engine for hook from top-level behavior configuration", "engineType", sc.Spec.Behaviors.Engine.Type)
+				cfg.Engine.Type = sc.Spec.Behaviors.Engine.Type
+			}
+		}
+
+		resolvedCfgs = append(resolvedCfgs, cfg)
+	}
+
+	r.Log.V(0).Info("Returning hook configurations", "hook configurations", resolvedCfgs)
+
+	return resolvedCfgs, nil
 }
 
 // When a behavior executes, the resource engine is configured by the
 // object which triggered the behavior. This method encapsulates the logic to
 // create the resource engine configuration from the object's fields.
-//
-// TODO Currently creation fails if the config map already exists, but it should
-// succeed instead.
-func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
+func (r *RenderPhaseReconciler) createBehaviorEngineConfiguration(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
-	sc *v1alpha1.StackConfiguration,
+	hc *v1alpha1.HookConfiguration,
 ) (*corev1.ConfigMap, error) {
 	// yamlyamlyamlyamlyaml
-	// TODO if spec is missing, that won't work very well
+	// TODO if spec is missing, this won't work very well
 	s, ok := claim.Object[spec]
 
 	if !ok {
@@ -263,7 +267,7 @@ func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 	stringConfigContents := string(configContents)
 
 	// TODO get the engine type from the configuration
-	engineType := r.getEngineType(claim, sc)
+	engineType := hc.Engine.Type
 
 	// TODO engine type should have a bit more structure;
 	// probably better to use an enum type pattern, with an
@@ -288,15 +292,19 @@ func (r *HelmChartInstallReconciler) createBehaviorEngineConfiguration(
 	r.Log.V(0).Info("Generated config map to pass engine configuration", "configMap", generatedMap)
 
 	if err := r.Client.Create(ctx, generatedMap); err != nil {
-		r.Log.V(0).Info("Error creating config map!", "claim", claim, "error", err, "configMap", generatedMap)
-		return nil, err
+		if kerrors.IsAlreadyExists(err) {
+			r.Log.V(1).Info("Config map already exists! Ignoring error", "claim", claim, "configMap", generatedMap)
+		} else {
+			r.Log.V(0).Info("Error creating config map!", "claim", claim, "error", err, "configMap", generatedMap)
+			return nil, err
+		}
 	}
 
 	return generatedMap, err
 }
 
 // The main reason this exists as its own method is to encapsulate the hashing logic
-func (r *HelmChartInstallReconciler) generateConfigMap(name string, fileName string, fileContents string) (*corev1.ConfigMap, error) {
+func (r *RenderPhaseReconciler) generateConfigMap(name string, fileName string, fileContents string) (*corev1.ConfigMap, error) {
 	cm := &corev1.ConfigMap{}
 	cm.Name = name
 	cm.Data = map[string]string{}
@@ -312,45 +320,22 @@ func (r *HelmChartInstallReconciler) generateConfigMap(name string, fileName str
 	return cm, nil
 }
 
-// This is in its own method because it will involve
-// reading through multiple levels of the configuration to see
-// what the engine type is. It may even involve inferring an engine
-// type based on the stack contents (though that may happen earlier
-// in the lifecycle than this).
-func (r *HelmChartInstallReconciler) getEngineType(
-	claim *unstructured.Unstructured,
-	sc *v1alpha1.StackConfiguration,
-) string {
-	return "helm2"
-}
-
-func (r *HelmChartInstallReconciler) executeBehavior(
-	ctx context.Context,
-	claim *unstructured.Unstructured,
-	engineCfg *corev1.ConfigMap,
-	targetStackImage string,
-	behavior *v1alpha1.StackConfigurationBehavior,
-) (*unstructured.Unstructured, error) {
-	for _, resource := range behavior.Resources {
-		// TODO error handling
-		// TODO use result
-		r.executeHook(ctx, claim, engineCfg, targetStackImage, resource)
-	}
-	// TODO return a real result
-	return &unstructured.Unstructured{}, nil
-}
-
 // TODO we could have a method create the job, and a higher-level one execute it.
-func (r *HelmChartInstallReconciler) executeHook(
+func (r *RenderPhaseReconciler) executeHook(
 	ctx context.Context,
 	claim *unstructured.Unstructured,
 	engineCfg *corev1.ConfigMap,
 	targetStackImage string,
-	targetResourceDir string,
+	hookCfg *v1alpha1.HookConfiguration,
 ) (*unstructured.Unstructured, error) {
 	// TODO if there is no config specified, either use an empty config or don't specify
 	// one at all.
 
+	// TODO if we change this to meta.AsController, and we have the controller-runtime controller configured
+	// to Own Jobs, then we'll get a reconcile call when Jobs finish. However, we'd need to change the logic
+	// for the reconcile a bit to support that effectively. For example:
+	// - We wouldn't want to create jobs every time reconcile is run
+	//   * This means keeping track of created jobs somewhere and could also mean using deterministic job names
 	ownerRef := meta.AsOwner(meta.ReferenceTo(claim, claim.GroupVersionKind()))
 	var jobBackoff int32
 
@@ -358,10 +343,12 @@ func (r *HelmChartInstallReconciler) executeHook(
 	// Then for each resource behavior hook, we want to run the hook
 	// TODO update this to use the most recent format, where a hook is a structured object
 
-	resourceDir := fmt.Sprintf("/.registry/resources/%s", targetResourceDir)
+	resourceDir := fmt.Sprintf("/.registry/resources/%s", hookCfg.Directory)
 
 	engineCfgVolumeName := "engine-configuration"
 	engineCfgDir := "/usr/share/engine-configuration/"
+
+	// TODO this file name should not be hard-coded
 	engineCfgFile := fmt.Sprintf("%svalues.yaml", engineCfgDir)
 
 	stackVolumeName := "stack-configuration"
@@ -494,7 +481,7 @@ func (r *HelmChartInstallReconciler) executeHook(
 	return &unstructured.Unstructured{}, nil
 }
 
-func (r *HelmChartInstallReconciler) setClaimStatus(
+func (r *RenderPhaseReconciler) setClaimStatus(
 	claim *unstructured.Unstructured, result *unstructured.Unstructured,
 ) error {
 	// The claim is the CR that triggered this whole thing.
@@ -504,7 +491,7 @@ func (r *HelmChartInstallReconciler) setClaimStatus(
 	return nil
 }
 
-func (r *HelmChartInstallReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *RenderPhaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&helmv1alpha1.HelmChartInstall{}).
 		Complete(r)

@@ -33,33 +33,61 @@ spec:
           description: StackConfigurationSpec defines the desired state of StackConfiguration
           properties:
             behaviors:
-              description: 'INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-                Important: Run "make" to regenerate code after modifying this file'
+              description: 'Important: Run "make" to regenerate code after modifying
+                this file'
               properties:
                 crds:
                   additionalProperties:
                     description: StackConfigurationBehavior specifies an individual
                       behavior, by listing resources which should be processed.
                     properties:
-                      resources:
-                        items:
-                          type: string
-                        type: array
+                      engine:
+                        properties:
+                          type:
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      hooks:
+                        additionalProperties:
+                          items:
+                            description: HookConfiguration is the configuration for
+                              an individual hook which will be executed in response
+                              to an event.
+                            properties:
+                              directory:
+                                type: string
+                              engine:
+                                properties:
+                                  type:
+                                    type: string
+                                required:
+                                - type
+                                type: object
+                            required:
+                            - directory
+                            type: object
+                          type: array
+                        type: object
                     required:
-                    - resources
+                    - hooks
                     type: object
                   type: object
-              type: object
-            source:
-              description: StackConfigurationSource
-              properties:
-                image:
-                  description: a container image id TODO use the same image object
-                    as a pod
-                  type: string
-                url:
-                  description: a url, probably to a git repo
-                  type: string
+                engine:
+                  properties:
+                    type:
+                      type: string
+                  required:
+                  - type
+                  type: object
+                source:
+                  description: Theoretically, source and engine could be specified
+                    at a per-crd level or per-hook level as well.
+                  properties:
+                    image:
+                      description: a container image id
+                      type: string
+                  type: object
               type: object
           type: object
         status:
