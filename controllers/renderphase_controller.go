@@ -28,12 +28,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/kubectl/pkg/util/hash"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
 
 	"github.com/suskin/stack-template-engine/api/v1alpha1"
+	"github.com/suskin/stack-template-engine/engines"
 )
 
 // RenderPhaseReconciler reconciles an object which we're watching for a template stack
@@ -46,93 +45,7 @@ type RenderPhaseReconciler struct {
 
 const (
 	renderTimeout = 60 * time.Second
-	spec          = "spec"
 )
-
-type ResourceEngineRunner interface {
-	CreateConfig(
-		claim *unstructured.Unstructured,
-		hc *v1alpha1.HookConfiguration,
-		// engine type
-
-	) (*corev1.ConfigMap, error)
-	// ) (string fileName, string fileContents)
-	RunEngine(
-		claim *unstructured.Unstructured,
-		config *corev1.ConfigMap,
-	) error // (result, error)
-}
-
-type Helm2EngineRunner struct {
-	Log logr.Logger
-}
-
-// When a behavior executes, the resource engine is configured by the
-// object which triggered the behavior. This method encapsulates the logic to
-// create the resource engine configuration from the object's fields.
-func (her *Helm2EngineRunner) CreateConfig(claim *unstructured.Unstructured, hc *v1alpha1.HookConfiguration) (*corev1.ConfigMap, error) {
-	// yamlyamlyamlyamlyaml
-	// TODO if spec is missing, this won't work very well
-	s, ok := claim.Object[spec]
-
-	if !ok {
-		her.Log.V(0).Info("Spec not found on claim; not creating engine configuration", "claim", claim)
-	}
-
-	her.Log.V(0).Info("Converting configuration", "spec", s)
-	configContents, err := yaml.Marshal(s)
-
-	her.Log.V(0).Info("Configuration contents as yaml", "configContents", configContents)
-
-	if err != nil {
-		her.Log.Error(err, "Error marshaling claim spec as yaml!", "claim", claim)
-		return nil, err
-	}
-
-	// Underneath, the yamler uses https://godoc.org/encoding/json#Marshal,
-	// which means that the bytes are UTF-8 encoded
-	// Theoretically we could get better performance by using a binary config
-	// map, but having a string makes it better for humans who may want to observe
-	// or troubleshoot behavior.
-	stringConfigContents := string(configContents)
-
-	// TODO get the engine type from the configuration
-	engineType := hc.Engine.Type
-
-	// TODO engine type should have a bit more structure;
-	// probably better to use an enum type pattern, with an
-	// engine name and its corresponding configuration file
-	// name in the same object
-	configKeyName := ""
-
-	if engineType == "helm2" {
-		configKeyName = "values.yaml"
-	}
-
-	configName := string(claim.GetUID())
-	generatedMap, err := generateConfigMap(configName, configKeyName, stringConfigContents, her.Log)
-
-	if err != nil {
-		her.Log.V(0).Info("Error generating config map!", "claim", claim, "error", err)
-		return nil, err
-	}
-
-	generatedMap.SetNamespace(claim.GetNamespace())
-
-	her.Log.V(0).Info("Generated config map to pass engine configuration", "configMap", generatedMap)
-
-	return generatedMap, err
-}
-
-func (her *Helm2EngineRunner) RunEngine(claim *unstructured.Unstructured, config *corev1.ConfigMap) error {
-	return nil
-}
-
-func NewHelm2EngineRunner(log logr.Logger) *Helm2EngineRunner {
-	return &Helm2EngineRunner{
-		Log: log,
-	}
-}
 
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls/status,verbs=get;update;patch
@@ -203,11 +116,11 @@ func (r *RenderPhaseReconciler) render(ctx context.Context, claim *unstructured.
 	for _, hookCfg := range trb {
 		engineType := hookCfg.Engine.Type
 
-		var engineRunner ResourceEngineRunner
+		var engineRunner engines.ResourceEngineRunner
 
 		// TODO this should probably not be a hard-coded raw string
 		if engineType == "helm2" {
-			engineRunner = NewHelm2EngineRunner(r.Log)
+			engineRunner = engines.NewHelm2EngineRunner(r.Log)
 		} else {
 			r.Log.V(0).Info("Unrecognized engine type! Skipping hook.", "claim", claim, "hookConfig", hookCfg)
 			continue
@@ -350,23 +263,6 @@ func (r *RenderPhaseReconciler) getBehavior(
 	r.Log.V(0).Info("Returning hook configurations", "hook configurations", resolvedCfgs)
 
 	return resolvedCfgs, nil
-}
-
-// The main reason this exists as its own method is to encapsulate the hashing logic
-func generateConfigMap(name string, fileName string, fileContents string, log logr.Logger) (*corev1.ConfigMap, error) {
-	cm := &corev1.ConfigMap{}
-	cm.Name = name
-	cm.Data = map[string]string{}
-
-	cm.Data[fileName] = fileContents
-	h, err := hash.ConfigMapHash(cm)
-	if err != nil {
-		log.V(0).Info("Error hashing config map!", "error", err)
-		return cm, err
-	}
-	cm.Name = fmt.Sprintf("%s-%s", cm.Name, h)
-
-	return cm, nil
 }
 
 // TODO we could have a method create the job, and a higher-level one execute it.
