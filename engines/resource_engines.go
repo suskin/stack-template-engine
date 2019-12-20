@@ -24,14 +24,23 @@ import (
 	"github.com/suskin/stack-template-engine/api/v1alpha1"
 )
 
+// A ResourceEngineRunner is responsible for creating resources for a template stack when a hook is executed.
+//
+// The inputs are:
+// - A hook configuration
+// - The object which triggered this hook
+// - The source files to create resources from
+//
+// The outputs should be:
+// - Created resources
+//
+// This interface is still fairly new; in the future we'll want to be able to represent the status of the resources
+// which are being created. For example, if the resources are created asynchronously (say by running a Job), the
+// output the first time the engine is run may be the status of the Job. The next time, if the job is finished, it may
+// be some sort of reference to the objects which have been created.
 type ResourceEngineRunner interface {
-	CreateConfig(
-		claim *unstructured.Unstructured,
-		hc *v1alpha1.HookConfiguration,
-		// engine type
+	CreateConfig(claim *unstructured.Unstructured, hc *v1alpha1.HookConfiguration) (*corev1.ConfigMap, error)
 
-	) (*corev1.ConfigMap, error)
-	// ) (string fileName, string fileContents)
 	RunEngine(
 		ctx context.Context,
 		client client.Client,
