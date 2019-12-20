@@ -20,12 +20,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crossplaneio/crossplane-runtime/pkg/meta"
 	"github.com/go-logr/logr"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -141,10 +138,11 @@ func (r *RenderPhaseReconciler) render(ctx context.Context, claim *unstructured.
 			return err
 		}
 
-		// TODO support specifying the image on the hook
+		// TODO support specifying the image on the hook. We could start by just injecting the source image on the
+		// hook configuration, in the same way we do for engine type.
 		stackImage := cfg.Spec.Behaviors.Source.Image
 
-		result, err := r.executeHook(ctx, claim, cm, stackImage, &hookCfg)
+		result, err := engineRunner.RunEngine(ctx, r.Client, claim, cm, stackImage, &hookCfg)
 		// TODO check for errors
 
 		err = r.setClaimStatus(claim, result)
@@ -263,167 +261,6 @@ func (r *RenderPhaseReconciler) getBehavior(
 	r.Log.V(0).Info("Returning hook configurations", "hook configurations", resolvedCfgs)
 
 	return resolvedCfgs, nil
-}
-
-// TODO we could have a method create the job, and a higher-level one execute it.
-func (r *RenderPhaseReconciler) executeHook(
-	ctx context.Context,
-	claim *unstructured.Unstructured,
-	engineCfg *corev1.ConfigMap,
-	targetStackImage string,
-	hookCfg *v1alpha1.HookConfiguration,
-) (*unstructured.Unstructured, error) {
-	// TODO if there is no config specified, either use an empty config or don't specify
-	// one at all.
-
-	// TODO if we change this to meta.AsController, and we have the controller-runtime controller configured
-	// to Own Jobs, then we'll get a reconcile call when Jobs finish. However, we'd need to change the logic
-	// for the reconcile a bit to support that effectively. For example:
-	// - We wouldn't want to create jobs every time reconcile is run
-	//   * This means keeping track of created jobs somewhere and could also mean using deterministic job names
-	ownerRef := meta.AsOwner(meta.ReferenceTo(claim, claim.GroupVersionKind()))
-	var jobBackoff int32
-
-	// TODO target stack image will come from the stack object, or maybe the stack install object.
-	// Then for each resource behavior hook, we want to run the hook
-	// TODO update this to use the most recent format, where a hook is a structured object
-
-	resourceDir := fmt.Sprintf("/.registry/resources/%s", hookCfg.Directory)
-
-	engineCfgVolumeName := "engine-configuration"
-	engineCfgDir := "/usr/share/engine-configuration/"
-
-	// TODO this file name should not be hard-coded
-	engineCfgFile := fmt.Sprintf("%svalues.yaml", engineCfgDir)
-
-	stackVolumeName := "stack-configuration"
-	stackDestDir := "/usr/share/input/"
-
-	resourceCfgVolumeName := "resource-configuration"
-	resourceCfgDestDir := "/usr/share/resource-configuration/"
-	namespace := claim.GetNamespace()
-
-	// TODO we should generate a name and save a reference on the claim
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "helm-template-apply-",
-			Namespace:    namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				ownerRef,
-			},
-		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit: &jobBackoff,
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					InitContainers: []corev1.Container{
-						{
-							Name:  "load-stack",
-							Image: targetStackImage,
-							Command: []string{
-								// The "." suffix causes the cp -R to copy the contents of the directory instead of
-								// the directory itself
-								"cp", "-R", fmt.Sprintf("%s/.", resourceDir), stackDestDir,
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      stackVolumeName,
-									MountPath: stackDestDir,
-								},
-							},
-							ImagePullPolicy: corev1.PullNever,
-						},
-						{
-							Name:  "engine",
-							Image: "crossplane/helm-engine:latest",
-							Command: []string{
-								"helm",
-							},
-							Args: []string{
-								"template",
-								"--output-dir", resourceCfgDestDir,
-								"--namespace", namespace,
-								"--values", engineCfgFile,
-								stackDestDir,
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      stackVolumeName,
-									MountPath: stackDestDir,
-								},
-								{
-									Name:      resourceCfgVolumeName,
-									MountPath: resourceCfgDestDir,
-								},
-								{
-									Name:      engineCfgVolumeName,
-									MountPath: engineCfgDir,
-								},
-							},
-							ImagePullPolicy: corev1.PullNever,
-						},
-					},
-					Containers: []corev1.Container{
-						{
-							Name:  "kubectl",
-							Image: "crossplane/kubectl:latest",
-							// "--debug" can be added to this list of Args to get debug output from the job,
-							// but note that will be included in the stdout from the pod, which makes it
-							// impossible to create the resources that the job unpacks.
-							Command: []string{
-								"kubectl",
-							},
-							Args: []string{
-								"apply",
-								"--namespace", namespace,
-								"-R",
-								"-f",
-								resourceCfgDestDir,
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      resourceCfgVolumeName,
-									MountPath: resourceCfgDestDir,
-								},
-							},
-							ImagePullPolicy: corev1.PullNever,
-						},
-					},
-					Volumes: []corev1.Volume{
-						{
-							Name: stackVolumeName,
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
-						{
-							Name: resourceCfgVolumeName,
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
-						{
-							Name: engineCfgVolumeName,
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: engineCfg.GetName(),
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	if err := r.Client.Create(ctx, job); err != nil {
-		return nil, err
-	}
-
-	return &unstructured.Unstructured{}, nil
 }
 
 func (r *RenderPhaseReconciler) setClaimStatus(

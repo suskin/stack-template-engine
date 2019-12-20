@@ -15,8 +15,11 @@ limitations under the License.
 package engines
 
 import (
+	"context"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/suskin/stack-template-engine/api/v1alpha1"
 )
@@ -30,7 +33,11 @@ type ResourceEngineRunner interface {
 	) (*corev1.ConfigMap, error)
 	// ) (string fileName, string fileContents)
 	RunEngine(
+		ctx context.Context,
+		client client.Client,
 		claim *unstructured.Unstructured,
 		config *corev1.ConfigMap,
-	) error // (result, error)
+		stackSource string,
+		hc *v1alpha1.HookConfiguration,
+	) (*unstructured.Unstructured, error)
 }
