@@ -26,6 +26,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -85,13 +86,21 @@ func (r *SetupPhaseReconciler) setup(sc *v1alpha1.StackConfiguration) error {
 	// - Though, the ideal would be if we cached the configuration and changed it if it changed
 
 	behaviors := r.getBehaviors(sc)
+	configName, err := client.ObjectKeyFromObject(sc)
+
+	if err != nil {
+		r.Log.V(0).Info("setup exiting early because of error getting stack config object key", "err", err, "stackConfiguration", sc)
+		return err
+	}
 
 	for _, b := range behaviors {
 		gvk := b.gvk
+		// TODO it'd be great to create the CRD for the user if it doesn't exist yet - /ht @muvaf for this idea
+
 		// TODO we don't want to be hard-coding the event name here.
 		event := v1alpha1.EventName("reconcile")
 
-		if err := r.NewRenderController(gvk, event); err != nil {
+		if err := r.NewRenderController(gvk, event, configName); err != nil {
 			// TODO what do we want to do if some of the registrations succeed and some of them fail?
 			r.Log.Error(err, "Error creating new render controller!", "gvk", gvk)
 		}
@@ -123,7 +132,7 @@ func (r *SetupPhaseReconciler) getBehaviors(sc *v1alpha1.StackConfiguration) []B
 	return behaviors
 }
 
-func (r *SetupPhaseReconciler) NewRenderController(gvk *schema.GroupVersionKind, event v1alpha1.EventName) error {
+func (r *SetupPhaseReconciler) NewRenderController(gvk *schema.GroupVersionKind, event v1alpha1.EventName, configName types.NamespacedName) error {
 	// TODO
 	// - In the future, we may want to be able to stop listening when a stack is uninstalled.
 	// - What if we have multiple controller workers watching the stack configuration? Do we need to worry about trying to not
@@ -133,10 +142,11 @@ func (r *SetupPhaseReconciler) NewRenderController(gvk *schema.GroupVersionKind,
 	apiType.SetGroupVersionKind(*gvk)
 
 	reconciler := &RenderPhaseReconciler{
-		Client:    r.Manager.GetClient(),
-		Log:       ctrl.Log.WithName("controllers").WithName(fmt.Sprintf("%s.%s/%s", gvk.Kind, gvk.Group, gvk.Version)),
-		GVK:       gvk,
-		EventName: event,
+		Client:     r.Manager.GetClient(),
+		Log:        ctrl.Log.WithName("controllers").WithName(fmt.Sprintf("%s.%s/%s", gvk.Kind, gvk.Group, gvk.Version)),
+		GVK:        gvk,
+		EventName:  event,
+		ConfigName: configName,
 	}
 
 	r.Log.V(0).Info("Adding new controller to manager")

@@ -25,6 +25,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -34,10 +35,11 @@ import (
 
 // RenderPhaseReconciler reconciles an object which we're watching for a template stack
 type RenderPhaseReconciler struct {
-	Client    client.Client
-	Log       logr.Logger
-	GVK       *schema.GroupVersionKind
-	EventName v1alpha1.EventName
+	Client     client.Client
+	Log        logr.Logger
+	GVK        *schema.GroupVersionKind
+	EventName  v1alpha1.EventName
+	ConfigName types.NamespacedName
 }
 
 const (
@@ -174,18 +176,9 @@ func (r *RenderPhaseReconciler) getStackConfiguration(
 	// the most likely source of the stack configuration is the stack object itself.
 	// Other potential sources include a configmap
 
-	// TODO
-	// - Stack configuration will be coming from a Kubernetes object, probably the
-	//   Stack itself
-	name, err := client.ObjectKeyFromObject(claim)
-
-	if err != nil {
-		r.Log.V(0).Info("getStackConfiguration returning early because of error creating object key", "err", err, "claim", claim)
-		return nil, err
-	}
-
 	sc := &v1alpha1.StackConfiguration{}
-	if err := r.Client.Get(ctx, name, sc); err != nil {
+	if err := r.Client.Get(ctx, r.ConfigName, sc); err != nil {
+		// TODO if the error is that the config no longer exists, we may want to kill this controller. But, maybe that'll be handled at a different level.
 		r.Log.V(0).Info("getStackConfiguration returning early because of error fetching configuration", "err", err, "claim", claim)
 		return nil, err
 	}
