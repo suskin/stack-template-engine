@@ -116,11 +116,13 @@ func (r *RenderPhaseReconciler) render(ctx context.Context, claim *unstructured.
 		engineType := hookCfg.Engine.Type
 
 		var engineRunner engines.ResourceEngineRunner
-
 		// TODO this should probably not be a hard-coded raw string
-		if engineType == "helm2" {
+		switch engineType {
+		case "helm2":
 			engineRunner = engines.NewHelm2EngineRunner(r.Log)
-		} else {
+		case "kustomize":
+			engineRunner = engines.NewKustomizeEngine(r.Log)
+		default:
 			r.Log.V(0).Info("Unrecognized engine type! Skipping hook.", "claim", claim, "hookConfig", hookCfg)
 			continue
 		}
