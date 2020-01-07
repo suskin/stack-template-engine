@@ -113,7 +113,7 @@ func (her *Helm2EngineRunner) RunEngine(ctx context.Context, client client.Clien
 	// Then for each resource behavior hook, we want to run the hook
 	// TODO update this to use the most recent format, where a hook is a structured object
 
-	resourceDir := fmt.Sprintf("/.registry/resources/%s", hc.Directory)
+	resourceDir := fmt.Sprintf("/.registry/%s", hc.Directory)
 
 	engineCfgVolumeName := "engine-configuration"
 	engineCfgDir := "/usr/share/engine-configuration/"
