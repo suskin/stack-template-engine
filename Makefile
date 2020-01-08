@@ -74,3 +74,35 @@ endif
 helpers:
 	docker build . -f helm.Dockerfile --tag 'crossplane/helm-engine:latest'
 	docker build . -f kubectl.Dockerfile --tag 'crossplane/kubectl:latest'
+
+.PHONY: helpers
+
+integration-test: helpers integration-test-helm2
+.PHONY: integration-test
+
+integration-test-helm2:
+	docker build test/helm2 --tag 'crossplane/sample-stack-claim-test:helm2'
+	kubectl apply -f test/helm2/sample-crd.yaml
+	kubectl apply -f test/helm2/stack.yaml
+	kubectl apply -f test/helm2/sample-cr.yaml
+	@echo "Printing test object statuses"
+	kubectl get job -A
+	kubectl get pod -A
+	@echo "Giving the controller some time to process our resources . . ."
+	sleep 10
+	@echo "If the config map 'mycustomname' isn't found, try looking for it again, or inspect the job logs to debug."
+	kubectl get configmap mycustomname-helm2 -o yaml
+
+.PHONY: integration-test-helm2
+
+clean-integration-test: clean-integration-test-helm2
+
+.PHONY: clean-integration-test
+
+clean-integration-test-helm2:
+	kubectl delete configmap mycustomname
+	kubectl delete -f test/helm2/sample-cr.yaml
+	kubectl delete -f test/helm2/stack.yaml
+	kubectl delete -f test/helm2/sample-crd.yaml
+
+.PHONY: clean-integration-test-helm2
