@@ -16,8 +16,8 @@ spec:
         core.crossplane.io/name: "crossplane-stack-helm"
     spec:
       containers:
-      - name: "crossplane-stack-helm-controller"
-        image: "crossplane/stack-helm"
+      - name: "crossplane-stack-template-engine-controller"
+        image: "crossplane/stack-template-engine"
         env:
         - name: POD_NAME
           valueFrom:
