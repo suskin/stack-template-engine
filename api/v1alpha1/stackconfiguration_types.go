@@ -16,7 +16,9 @@ limitations under the License.
 package v1alpha1
 
 import (
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
@@ -28,7 +30,20 @@ type StackConfigurationSpec struct {
 }
 
 type ResourceEngineConfiguration struct {
-	Type string `json:"type"`
+	Type                    string `json:"type"`
+	*KustomizeConfiguration `json:",inline"`
+}
+
+type KustomizeConfiguration struct {
+	Overlays []Overlay `json:"overlays,omitempty"`
+	// types.Kustomization type has no deepcopy methods. We need to cast this into
+	// types.Kustomization object.
+	Kustomization *unstructured.Unstructured `json:"kustomization,omitempty"`
+}
+
+type Overlay struct {
+	From string             `json:"from"`
+	To   v1.ObjectReference `json:"to"`
 }
 
 // StackConfigurationSource is the stack image which this stack configuration is from.

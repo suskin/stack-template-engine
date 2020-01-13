@@ -3,6 +3,8 @@
 apiVersion: apiextensions.k8s.io/v1beta1
 kind: CustomResourceDefinition
 metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.2.4
   creationTimestamp: null
   name: helmchartinstalls.helm.samples.stacks.crossplane.io
 spec:
@@ -12,7 +14,7 @@ spec:
     listKind: HelmChartInstallList
     plural: helmchartinstalls
     singular: helmchartinstall
-  scope: ""
+  scope: Namespaced
   validation:
     openAPIV3Schema:
       description: HelmChartInstall is the Schema for the helmchartinstalls API

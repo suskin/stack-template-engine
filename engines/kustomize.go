@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"sigs.k8s.io/kustomize/api/types"
+
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/crossplaneio/crossplane-runtime/pkg/meta"
 	"github.com/go-logr/logr"
@@ -19,7 +22,8 @@ import (
 )
 
 const (
-	kustomizationFileName = "kustomization.yaml"
+	kustomizationFieldName = "kustomization.yaml"
+	overlaysFieldName      = "overlays.yaml"
 )
 
 func NewKustomizeEngine(logger logr.Logger) *KustomizeEngine {
@@ -31,50 +35,80 @@ type KustomizeEngine struct {
 }
 
 func (k *KustomizeEngine) CreateConfig(claim *unstructured.Unstructured, hc *v1alpha1.HookConfiguration) (*corev1.ConfigMap, error) {
-	kustomization, ok := claim.Object[spec].(*types.Kustomization)
-	if !ok {
-		return nil, fmt.Errorf("could not marshall claim spec into Kustomization type")
+	if hc.Engine.KustomizeConfiguration == nil {
+		return nil, fmt.Errorf("kustomize configuration is empty")
 	}
 	// Kustomize only works with relative paths.
 	stackRelativeDestDir, err := filepath.Rel(engineCfgDir, stackDestinationDir)
 	if err != nil {
 		return nil, err
 	}
+
+	// TODO(muvaf): investigate a better way to convert *Unstructured to Kustomization.
+	kustomizationJSON, err := yaml.Marshal(hc.Engine.Kustomization)
+	if err != nil {
+		return nil, err
+	}
+	kustomization := &types.Kustomization{}
+	if err := yaml.Unmarshal(kustomizationJSON, kustomization); err != nil {
+		return nil, err
+	}
 	// Final overlay has to refer to the base Kustomization directory.
-	kustomization.Resources = []string{
-		stackRelativeDestDir,
+	kustomization.Resources = append(kustomization.Resources, stackRelativeDestDir)
+	kustomization.PatchesStrategicMerge = []types.PatchStrategicMerge{
+		overlaysFieldName,
 	}
-
-	k.logger.V(0).Info("Converting configuration", "spec", kustomization)
-	configContents, err := yaml.Marshal(kustomization)
-
-	k.logger.V(0).Info("Configuration contents as yaml", "configContents", configContents)
-
+	kustomization.NamePrefix = fmt.Sprintf("%v-%v", claim.GetName(), kustomization.NamePrefix)
+	if kustomization.CommonLabels == nil {
+		kustomization.CommonLabels = map[string]string{}
+	}
+	//TODO(muvaf): use the user's domain.
+	kustomization.CommonLabels["crossplane.io/name"] = claim.GetName()
+	kustomization.CommonLabels["crossplane.io/namespace"] = claim.GetNamespace()
+	kustomization.CommonLabels["crossplane.io/uid"] = string(claim.GetUID())
+	kustomizationValue, err := yaml.Marshal(kustomization)
 	if err != nil {
-		k.logger.Error(err, "Error marshaling claim spec as yaml!", "claim", claim)
+		return nil, err
+	}
+	var overlayObjects []runtime.Object
+	for _, overlay := range hc.Engine.Overlays {
+		// First make sure there is a value in the referred path.
+		val, exists, err := unstructured.NestedFieldCopy(claim.Object, strings.Split(overlay.From, ".")...)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			continue
+		}
+		// Create the patch with the given value.
+		// TODO(muvaf): support more than one binding pair for the same resource entry.
+		obj := &unstructured.Unstructured{}
+		obj.SetAPIVersion(overlay.To.APIVersion)
+		obj.SetKind(overlay.To.Kind)
+		obj.SetName(overlay.To.Name)
+		obj.SetNamespace(overlay.To.Namespace)
+		if err := unstructured.SetNestedField(obj.Object, val, strings.Split(overlay.To.FieldPath, ".")...); err != nil {
+			return nil, err
+		}
+		overlayObjects = append(overlayObjects, obj)
+	}
+	overlayYAMLs, err := yaml.Marshal(overlayObjects)
+	if err != nil {
 		return nil, err
 	}
 
-	// Underneath, the yamler uses https://godoc.org/encoding/json#Marshal,
-	// which means that the bytes are UTF-8 encoded
-	// Theoretically we could get better performance by using a binary config
-	// map, but having a string makes it better for humans who may want to observe
-	// or troubleshoot behavior.
-	stringConfigContents := string(configContents)
-
-	configName := string(claim.GetUID())
-	generatedMap, err := generateConfigMap(configName, kustomizationFileName, stringConfigContents, k.logger)
-
-	if err != nil {
-		k.logger.V(0).Info("Error generating config map!", "claim", claim, "error", err)
-		return nil, err
+	cm := &corev1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      string(claim.GetUID()),
+			Namespace: claim.GetNamespace(),
+		},
+		Data: map[string]string{
+			kustomizationFieldName: string(kustomizationValue),
+			overlaysFieldName:      string(overlayYAMLs),
+		},
 	}
-
-	generatedMap.SetNamespace(claim.GetNamespace())
-
-	k.logger.V(0).Info("Generated config map to pass engine configuration", "configMap", generatedMap)
-
-	return generatedMap, err
+	return cm, nil
 }
 
 func (k *KustomizeEngine) RunEngine(ctx context.Context, client client.Client, claim *unstructured.Unstructured, config *corev1.ConfigMap, stackSource string, hc *v1alpha1.HookConfiguration) (*unstructured.Unstructured, error) {
