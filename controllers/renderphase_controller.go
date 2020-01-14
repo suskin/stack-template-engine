@@ -243,10 +243,10 @@ func (r *RenderPhaseReconciler) getBehavior(
 		if cfg.Engine.Type == "" {
 			if scb.Engine.Type != "" {
 				r.Log.V(0).Info("Inheriting engine for hook from CRD-level behavior configuration", "engineType", scb.Engine.Type)
-				cfg.Engine.Type = scb.Engine.Type
+				cfg.Engine = scb.Engine
 			} else {
 				r.Log.V(0).Info("Inheriting engine for hook from top-level behavior configuration", "engineType", sc.Spec.Behaviors.Engine.Type)
-				cfg.Engine.Type = sc.Spec.Behaviors.Engine.Type
+				cfg.Engine = sc.Spec.Behaviors.Engine
 			}
 		}
 

@@ -42,8 +42,13 @@ type KustomizeConfiguration struct {
 }
 
 type Overlay struct {
-	From string             `json:"from"`
-	To   v1.ObjectReference `json:"to"`
+	v1.ObjectReference `json:",inline"`
+	Bindings           []FieldBinding `json:"bindings"`
+}
+
+type FieldBinding struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // StackConfigurationSource is the stack image which this stack configuration is from.

@@ -1,0 +1,31 @@
+---
+apiVersion: helm.samples.stacks.crossplane.io/v1alpha1
+kind: StackConfiguration
+metadata:
+  name: template-stack-test
+spec:
+  behaviors:
+    crds:
+      SampleClaim.samples.stacks.crossplane.io/v1alpha1:
+        hooks:
+          reconcile:
+          - directory: 'resources'
+        engine:
+          type: kustomize
+          overlays:
+            - apiVersion: gcp.crossplane.io/v1alpha3
+              kind: Provider
+              name: gcp-provider
+              bindings:
+                - from: "spec.credentialsSecretRef"
+                  to: "spec.credentialsSecretRef"
+                - from: "spec.projectID"
+                  to: "spec.projectID"
+            - apiVersion: v1
+              kind: ConfigMap
+              name: gcp-config
+              bindings:
+                - from: "spec.region"
+                  to: "data.region"
+    source:
+      image: crossplaneio/minimal-gcp:latest

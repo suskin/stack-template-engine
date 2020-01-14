@@ -8,8 +8,6 @@ import (
 
 	"sigs.k8s.io/kustomize/api/types"
 
-	"k8s.io/apimachinery/pkg/runtime"
-
 	"github.com/crossplaneio/crossplane-runtime/pkg/meta"
 	"github.com/go-logr/logr"
 	"github.com/suskin/stack-template-engine/api/v1alpha1"
@@ -70,33 +68,35 @@ func (k *KustomizeEngine) CreateConfig(claim *unstructured.Unstructured, hc *v1a
 	if err != nil {
 		return nil, err
 	}
-	var overlayObjects []runtime.Object
+	finalOverlayYAML := ""
 	for _, overlay := range hc.Engine.Overlays {
-		// First make sure there is a value in the referred path.
-		val, exists, err := unstructured.NestedFieldCopy(claim.Object, strings.Split(overlay.From, ".")...)
+		obj := &unstructured.Unstructured{}
+		obj.SetAPIVersion(overlay.APIVersion)
+		obj.SetKind(overlay.Kind)
+		obj.SetName(overlay.Name)
+		obj.SetNamespace(overlay.Namespace)
+
+		for _, binding := range overlay.Bindings {
+			// First make sure there is a value in the referred path.
+			val, exists, err := unstructured.NestedFieldCopy(claim.Object, strings.Split(binding.From, ".")...)
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				continue
+			}
+			if err := unstructured.SetNestedField(obj.Object, val, strings.Split(binding.To, ".")...); err != nil {
+				return nil, err
+			}
+		}
+		overlayYAML, err := yaml.Marshal(obj)
 		if err != nil {
 			return nil, err
 		}
-		if !exists {
-			continue
-		}
-		// Create the patch with the given value.
-		// TODO(muvaf): support more than one binding pair for the same resource entry.
-		obj := &unstructured.Unstructured{}
-		obj.SetAPIVersion(overlay.To.APIVersion)
-		obj.SetKind(overlay.To.Kind)
-		obj.SetName(overlay.To.Name)
-		obj.SetNamespace(overlay.To.Namespace)
-		if err := unstructured.SetNestedField(obj.Object, val, strings.Split(overlay.To.FieldPath, ".")...); err != nil {
-			return nil, err
-		}
-		overlayObjects = append(overlayObjects, obj)
+		// TODO(muvaf): yaml.Marshal does not support outputting multiple YAML
+		// documents. That's temporary solution.
+		finalOverlayYAML = fmt.Sprintf("%s---\n%s", finalOverlayYAML, string(overlayYAML))
 	}
-	overlayYAMLs, err := yaml.Marshal(overlayObjects)
-	if err != nil {
-		return nil, err
-	}
-
 	cm := &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
@@ -105,7 +105,7 @@ func (k *KustomizeEngine) CreateConfig(claim *unstructured.Unstructured, hc *v1a
 		},
 		Data: map[string]string{
 			kustomizationFieldName: string(kustomizationValue),
-			overlaysFieldName:      string(overlayYAMLs),
+			overlaysFieldName:      finalOverlayYAML,
 		},
 	}
 	return cm, nil
@@ -127,7 +127,7 @@ func (k *KustomizeEngine) RunEngine(ctx context.Context, client client.Client, c
 	// Then for each resource behavior hook, we want to run the hook
 	// TODO update this to use the most recent format, where a hook is a structured object
 
-	resourceDir := filepath.Join("/.registry/resources", hc.Directory)
+	resourceDir := hc.Directory
 
 	engineCfgVolumeName := "engine-configuration"
 
@@ -179,7 +179,10 @@ func (k *KustomizeEngine) RunEngine(ctx context.Context, client client.Client, c
 								"bash", "-c",
 							},
 							Args: []string{
-								fmt.Sprintf("kubectl apply --kustomize %s", engineCfgDir),
+								// Commented out until RBAC problems are resolved.
+								//fmt.Sprintf("kustomize build %s | kubectl -n %s apply -f -", engineCfgDir, claim.GetNamespace()),
+
+								fmt.Sprintf("kustomize build %s", engineCfgDir),
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
