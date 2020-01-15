@@ -20,34 +20,30 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crossplaneio/crossplane-runtime/pkg/meta"
 	"github.com/go-logr/logr"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/kubectl/pkg/util/hash"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
 
 	"github.com/suskin/stack-template-engine/api/v1alpha1"
-	helmv1alpha1 "github.com/suskin/stack-template-engine/api/v1alpha1"
+	"github.com/suskin/stack-template-engine/engines"
 )
 
 // RenderPhaseReconciler reconciles an object which we're watching for a template stack
 type RenderPhaseReconciler struct {
-	Client    client.Client
-	Log       logr.Logger
-	GVK       *schema.GroupVersionKind
-	EventName v1alpha1.EventName
+	Client     client.Client
+	Log        logr.Logger
+	GVK        *schema.GroupVersionKind
+	EventName  v1alpha1.EventName
+	ConfigName types.NamespacedName
 }
 
 const (
 	renderTimeout = 60 * time.Second
-	spec          = "spec"
 )
 
 // +kubebuilder:rbac:groups=helm.samples.stacks.crossplane.io,resources=helmchartinstalls,verbs=get;list;watch;create;update;patch;delete
@@ -117,23 +113,59 @@ func (r *RenderPhaseReconciler) render(ctx context.Context, claim *unstructured.
 	}
 
 	for _, hookCfg := range trb {
-		engineCfg, err := r.createBehaviorEngineConfiguration(ctx, claim, &hookCfg)
+		engineType := hookCfg.Engine.Type
+
+		var engineRunner engines.ResourceEngineRunner
+
+		// TODO this should probably not be a hard-coded raw string
+		if engineType == "helm2" {
+			engineRunner = engines.NewHelm2EngineRunner(r.Log)
+		} else {
+			r.Log.V(0).Info("Unrecognized engine type! Skipping hook.", "claim", claim, "hookConfig", hookCfg)
+			continue
+		}
+
+		cm, err := engineRunner.CreateConfig(claim, &hookCfg)
+
+		// engineCfg, err := r.createBehaviorEngineConfiguration(ctx, claim, &hookCfg)
 
 		if err != nil {
-			r.Log.Error(err, "Error creating engine configuration!", "claim", claim, "hook config", hookCfg)
+			r.Log.Error(err, "Error creating engine configuration!", "claim", claim, "hookConfig", hookCfg)
 			return err
 		}
 
-		// TODO support specifying the image on the hook
+		err = r.createConfigMap(ctx, cm)
+		if err != nil {
+			r.Log.Error(err, "Error creating config map!", "claim", claim, "hookConfig", hookCfg)
+			return err
+		}
+
+		// TODO support specifying the image on the hook. We could start by just injecting the source image on the
+		// hook configuration, in the same way we do for engine type.
 		stackImage := cfg.Spec.Behaviors.Source.Image
 
-		result, err := r.executeHook(ctx, claim, engineCfg, stackImage, &hookCfg)
+		result, err := engineRunner.RunEngine(ctx, r.Client, claim, cm, stackImage, &hookCfg)
 		// TODO check for errors
 
 		err = r.setClaimStatus(claim, result)
 	}
 
 	return err
+}
+
+// This mostly exists to encapsulate the logging and the ignoring of already exists errors
+func (r *RenderPhaseReconciler) createConfigMap(ctx context.Context, cm *corev1.ConfigMap) error {
+	if err := r.Client.Create(ctx, cm); err != nil {
+		if kerrors.IsAlreadyExists(err) {
+			r.Log.V(1).Info("Config map already exists! Ignoring error", "configMap", cm)
+		} else {
+			// One might consider logging an error here, but the logging is handled at a higher level
+			// where more context can be logged.
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (r *RenderPhaseReconciler) getStackConfiguration(
@@ -144,18 +176,9 @@ func (r *RenderPhaseReconciler) getStackConfiguration(
 	// the most likely source of the stack configuration is the stack object itself.
 	// Other potential sources include a configmap
 
-	// TODO
-	// - Stack configuration will be coming from a Kubernetes object, probably the
-	//   Stack itself
-	name, err := client.ObjectKeyFromObject(claim)
-
-	if err != nil {
-		r.Log.V(0).Info("getStackConfiguration returning early because of error creating object key", "err", err, "claim", claim)
-		return nil, err
-	}
-
 	sc := &v1alpha1.StackConfiguration{}
-	if err := r.Client.Get(ctx, name, sc); err != nil {
+	if err := r.Client.Get(ctx, r.ConfigName, sc); err != nil {
+		// TODO if the error is that the config no longer exists, we may want to kill this controller. But, maybe that'll be handled at a different level.
 		r.Log.V(0).Info("getStackConfiguration returning early because of error fetching configuration", "err", err, "claim", claim)
 		return nil, err
 	}
@@ -233,254 +256,6 @@ func (r *RenderPhaseReconciler) getBehavior(
 	return resolvedCfgs, nil
 }
 
-// When a behavior executes, the resource engine is configured by the
-// object which triggered the behavior. This method encapsulates the logic to
-// create the resource engine configuration from the object's fields.
-func (r *RenderPhaseReconciler) createBehaviorEngineConfiguration(
-	ctx context.Context,
-	claim *unstructured.Unstructured,
-	hc *v1alpha1.HookConfiguration,
-) (*corev1.ConfigMap, error) {
-	// yamlyamlyamlyamlyaml
-	// TODO if spec is missing, this won't work very well
-	s, ok := claim.Object[spec]
-
-	if !ok {
-		r.Log.V(0).Info("Spec not found on claim; not creating engine configuration", "claim", claim)
-	}
-
-	r.Log.V(0).Info("Converting configuration", "spec", s)
-	configContents, err := yaml.Marshal(s)
-
-	r.Log.V(0).Info("Configuration contents as yaml", "configContents", configContents)
-
-	if err != nil {
-		r.Log.Error(err, "Error marshaling claim spec as yaml!", "claim", claim)
-		return nil, err
-	}
-
-	// Underneath, the yamler uses https://godoc.org/encoding/json#Marshal,
-	// which means that the bytes are UTF-8 encoded
-	// Theoretically we could get better performance by using a binary config
-	// map, but having a string makes it better for humans who may want to observe
-	// or troubleshoot behavior.
-	stringConfigContents := string(configContents)
-
-	// TODO get the engine type from the configuration
-	engineType := hc.Engine.Type
-
-	// TODO engine type should have a bit more structure;
-	// probably better to use an enum type pattern, with an
-	// engine name and its corresponding configuration file
-	// name in the same object
-	configKeyName := ""
-
-	if engineType == "helm2" {
-		configKeyName = "values.yaml"
-	}
-
-	configName := string(claim.GetUID())
-	generatedMap, err := r.generateConfigMap(configName, configKeyName, stringConfigContents)
-
-	if err != nil {
-		r.Log.V(0).Info("Error generating config map!", "claim", claim, "error", err)
-		return nil, err
-	}
-
-	generatedMap.SetNamespace(claim.GetNamespace())
-
-	r.Log.V(0).Info("Generated config map to pass engine configuration", "configMap", generatedMap)
-
-	if err := r.Client.Create(ctx, generatedMap); err != nil {
-		if kerrors.IsAlreadyExists(err) {
-			r.Log.V(1).Info("Config map already exists! Ignoring error", "claim", claim, "configMap", generatedMap)
-		} else {
-			r.Log.V(0).Info("Error creating config map!", "claim", claim, "error", err, "configMap", generatedMap)
-			return nil, err
-		}
-	}
-
-	return generatedMap, err
-}
-
-// The main reason this exists as its own method is to encapsulate the hashing logic
-func (r *RenderPhaseReconciler) generateConfigMap(name string, fileName string, fileContents string) (*corev1.ConfigMap, error) {
-	cm := &corev1.ConfigMap{}
-	cm.Name = name
-	cm.Data = map[string]string{}
-
-	cm.Data[fileName] = fileContents
-	h, err := hash.ConfigMapHash(cm)
-	if err != nil {
-		r.Log.V(0).Info("Error hashing config map!", "error", err)
-		return cm, err
-	}
-	cm.Name = fmt.Sprintf("%s-%s", cm.Name, h)
-
-	return cm, nil
-}
-
-// TODO we could have a method create the job, and a higher-level one execute it.
-func (r *RenderPhaseReconciler) executeHook(
-	ctx context.Context,
-	claim *unstructured.Unstructured,
-	engineCfg *corev1.ConfigMap,
-	targetStackImage string,
-	hookCfg *v1alpha1.HookConfiguration,
-) (*unstructured.Unstructured, error) {
-	// TODO if there is no config specified, either use an empty config or don't specify
-	// one at all.
-
-	// TODO if we change this to meta.AsController, and we have the controller-runtime controller configured
-	// to Own Jobs, then we'll get a reconcile call when Jobs finish. However, we'd need to change the logic
-	// for the reconcile a bit to support that effectively. For example:
-	// - We wouldn't want to create jobs every time reconcile is run
-	//   * This means keeping track of created jobs somewhere and could also mean using deterministic job names
-	ownerRef := meta.AsOwner(meta.ReferenceTo(claim, claim.GroupVersionKind()))
-	var jobBackoff int32
-
-	// TODO target stack image will come from the stack object, or maybe the stack install object.
-	// Then for each resource behavior hook, we want to run the hook
-	// TODO update this to use the most recent format, where a hook is a structured object
-
-	resourceDir := fmt.Sprintf("/.registry/resources/%s", hookCfg.Directory)
-
-	engineCfgVolumeName := "engine-configuration"
-	engineCfgDir := "/usr/share/engine-configuration/"
-
-	// TODO this file name should not be hard-coded
-	engineCfgFile := fmt.Sprintf("%svalues.yaml", engineCfgDir)
-
-	stackVolumeName := "stack-configuration"
-	stackDestDir := "/usr/share/input/"
-
-	resourceCfgVolumeName := "resource-configuration"
-	resourceCfgDestDir := "/usr/share/resource-configuration/"
-	namespace := claim.GetNamespace()
-
-	// TODO we should generate a name and save a reference on the claim
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "helm-template-apply-",
-			Namespace:    namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				ownerRef,
-			},
-		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit: &jobBackoff,
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					InitContainers: []corev1.Container{
-						{
-							Name:  "load-stack",
-							Image: targetStackImage,
-							Command: []string{
-								// The "." suffix causes the cp -R to copy the contents of the directory instead of
-								// the directory itself
-								"cp", "-R", fmt.Sprintf("%s/.", resourceDir), stackDestDir,
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      stackVolumeName,
-									MountPath: stackDestDir,
-								},
-							},
-							ImagePullPolicy: corev1.PullNever,
-						},
-						{
-							Name:  "engine",
-							Image: "crossplane/helm-engine:latest",
-							Command: []string{
-								"helm",
-							},
-							Args: []string{
-								"template",
-								"--output-dir", resourceCfgDestDir,
-								"--namespace", namespace,
-								"--values", engineCfgFile,
-								stackDestDir,
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      stackVolumeName,
-									MountPath: stackDestDir,
-								},
-								{
-									Name:      resourceCfgVolumeName,
-									MountPath: resourceCfgDestDir,
-								},
-								{
-									Name:      engineCfgVolumeName,
-									MountPath: engineCfgDir,
-								},
-							},
-							ImagePullPolicy: corev1.PullNever,
-						},
-					},
-					Containers: []corev1.Container{
-						{
-							Name:  "kubectl",
-							Image: "crossplane/kubectl:latest",
-							// "--debug" can be added to this list of Args to get debug output from the job,
-							// but note that will be included in the stdout from the pod, which makes it
-							// impossible to create the resources that the job unpacks.
-							Command: []string{
-								"kubectl",
-							},
-							Args: []string{
-								"apply",
-								"--namespace", namespace,
-								"-R",
-								"-f",
-								resourceCfgDestDir,
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      resourceCfgVolumeName,
-									MountPath: resourceCfgDestDir,
-								},
-							},
-							ImagePullPolicy: corev1.PullNever,
-						},
-					},
-					Volumes: []corev1.Volume{
-						{
-							Name: stackVolumeName,
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
-						{
-							Name: resourceCfgVolumeName,
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
-						{
-							Name: engineCfgVolumeName,
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: engineCfg.GetName(),
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	if err := r.Client.Create(ctx, job); err != nil {
-		return nil, err
-	}
-
-	return &unstructured.Unstructured{}, nil
-}
-
 func (r *RenderPhaseReconciler) setClaimStatus(
 	claim *unstructured.Unstructured, result *unstructured.Unstructured,
 ) error {
@@ -489,10 +264,4 @@ func (r *RenderPhaseReconciler) setClaimStatus(
 	// If the processing happens in a job, the status should be updated after the job completes, which may mean
 	// waiting for it to complete by using a watcher.
 	return nil
-}
-
-func (r *RenderPhaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&helmv1alpha1.HelmChartInstall{}).
-		Complete(r)
 }
